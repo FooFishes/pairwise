@@ -55,8 +55,10 @@ testdata/script/     testscript 端到端用例
 - **哪些命令不经常驻进程**：`init`、`check`、`merge-driver`、`git-hook commit-msg` 在进程内直接执行（CI 与 `git merge` 期间不应拉起后台进程）；其余命令一律经 Unix Socket 调用常驻进程，未运行时自动拉起。
 - **常驻进程入口**：隐藏子命令 `pair daemon` 以前台方式运行常驻进程，自动拉起时以脱离终端的子进程执行它；`pair serve` 确保常驻进程运行并输出界面地址，`pair serve --stop` 停止当前工作树的常驻进程。
 - **Socket 路径**：`$PAIR_RUNTIME_DIR`（未设置时为系统临时目录）下的 `pair-<工作树根路径 SHA-256 前 16 位>.sock`，权限 `0600`。
-- **运行信息**：`$GIT_DIR/pair/daemon.json` 记录 pid、socket 路径、HTTP 端口与构建指纹；CLI 发现构建指纹与自身不一致（升级或重新编译）时先停止旧进程再拉起。构建指纹取可执行文件的大小与修改时间。
+- **运行信息**：`$GIT_DIR/pair/daemon.json` 记录 pid、socket 路径、HTTP 端口与构建指纹；CLI 每次建立连接时按其中记录的 socket 连接（没有记录时按上一条推算），因此运行目录环境变量与常驻进程不同也能连上；文件锁被占用却连不上时报错并给出 `kill <pid>`。CLI 发现构建指纹与自身不一致（升级或重新编译）时请求旧进程退出，等它释放文件锁后再拉起，并发的多个 CLI 最终连上同一个新实例。构建指纹取可执行文件的大小与修改时间。工作树未初始化时不拉起常驻进程。
 - **事件推送**：RPC 走 Connect，事件流是独立的标准 SSE 端点 `GET /events`，用 `id:` 字段携带递增序号，支持 `Last-Event-ID` 请求头与 `?since=` 参数补发；浏览器直接用 `EventSource`，`pair watch --jsonl` 经 Unix Socket 读同一端点。
+- **状态校准与配置**：每个请求开始时按当时的 HEAD 与磁盘内容校准分支与文档索引，紧随 `git checkout` 或外部编辑的命令不依赖文件监听的去抖；文件监听只负责推送事件。`.pair/config.toml` 随索引一起重新读取，内容无效时沿用上一份有效配置。
+- **退出码**：成功 0，业务错误与检查未通过 1，用法错误 2；常驻进程判定的参数或输入不合法（`InvalidArgument`）同样为 2。
 - **界面访问令牌**：`pair serve` 每次输出的地址带一次性 `?token=`，首个请求用它换取 `HttpOnly; SameSite=Strict` 的会话 Cookie 后令牌作废；`Host` 只接受 `127.0.0.1:<port>` 与 `localhost:<port>`，带 `Origin` 的请求必须同源。Unix Socket 入口不校验令牌，由文件权限隔离。
 
 ### 4.2 文档模型
@@ -70,8 +72,8 @@ testdata/script/     testscript 端到端用例
 
 ### 4.3 更新与合并
 
-- **`update <id>`**：输入是完整文档（含 Frontmatter）。**`update <id#sec>`**：输入是该区块，首行为 `## 标题 <!-- #sec -->` 时整体替换区块，否则保留原标题只替换正文；输入可以以只含 `assumptions:` 的 Frontmatter 开头，用来整体设置该区块的假设列表，省略则假设不变。
-- **合并方式**：以基准快照为 base、磁盘当前文件为 ours、按输入构造的新文档为 theirs 做三路合并。正文按区块 ID 合并（前言区视为一个区块），Frontmatter 按键合并，`assumptions / retracted` 按条目 ID 合并；同一区块或同一键两侧都改且结果不同即冲突，冲突时拒绝写入并输出统一格式差异。未改动区块的字节原样保留，Frontmatter 无改动时原样保留字节。
+- **`update <id>`**：输入是完整文档（含 Frontmatter）。**`update <id#sec>`**：输入是该区块，首行为 `## 标题 <!-- #sec -->` 时整体替换区块，否则保留原标题只替换正文（沿用原区块标题后与末尾的空行）；输入可以以只含 `assumptions:` 的 Frontmatter 开头，用来整体设置该区块的假设列表，省略则假设不变，此时正文为空表示保留原正文。输入为空或只有空白时按缺少输入拒绝；区块输入使其余区块的切分发生变化（未闭合的代码块或 HTML 注释吞掉其后的区块、夹带其他 `##` 标题）时拒绝写入。
+- **合并方式**：以基准快照为 base、磁盘当前文件为 ours、按输入构造的新文档为 theirs 做三路合并。正文按区块 ID 合并（前言区视为一个区块），Frontmatter 按键合并，`assumptions / retracted` 按条目 ID 合并；某侧是否改动按归一化后的内容判断，但保留行尾两个以上空格的 Markdown 硬换行（只差换行符、空行或行尾零星空白不算改动），两侧都改且只差空白不算冲突；同一区块或同一键两侧都改且结果不同即冲突，冲突时拒绝写入并输出统一格式差异。正文区块顺序与按 id 合并的序列顺序三路合并：只有一侧调整顺序时采用该侧，两侧以不同方式调整时记为冲突（`order`）；YAML 映射的键序不计入语义比较，只调整键序不算改动。未改动区块的字节与其来源版本一致，只在合并后新出现的相邻处按该区块的换行符补空行；Frontmatter 无改动时原样保留字节，有改动时只重新编码值有变化的顶层键，其余顶层键（含其前的注释）沿用 ours 或 theirs 的原文字节，单独编码的部分展开 YAML 别名。
 - **受控字段**：`update` 结果中的 `confirmed_hash` 与 `retracted` 一律取自磁盘当前文件；随后对 ours 中存在、结果中消失且未被 `--resolves` 关联的假设，追加到同区块 `retracted`。
 - **新建文档**：文件不存在时免传 `--base`，只接受整文档输入，`--kind module|flow` 决定目录（默认 `module`）。
 - **成功输出**：写入采用临时文件加重命名；成功后输出新的整文件 base，供连续更新使用。
@@ -80,16 +82,16 @@ testdata/script/     testscript 端到端用例
 
 - **反馈 ID**：待确认问题沿用 decision ID；区块批注由 SQLite 自增序号生成 `fb-<n>`。
 - **生命周期**：`staged`（暂存）→ `triggered`（已发送）→ `drained`（Agent 已读取）→ `resolved`（已闭环）。暂存与队列按分支名隔离，切换分支后原分支的条目挂起保留。
-- **`--resolves`**：批注只能由覆盖其目标区块的 `update` 闭环，带假设 ID 的批注闭环时工具移除该假设；问题的每个 `target` 由覆盖它的 `update` 或 `--no-change` 计入完成度，全部完成后删除 `.pair/decisions/<id>.md` 并写入结案记录。尚未被开发者选择并发送的问题不能被闭环。
-- **`ask`**：写入或覆盖 `.pair/decisions/<id>.md`，校验 `targets` 均可解析、存在 `pw:compare` 容器且 `default_option` 是其中的选项。`--wait` 在开发者对该问题点击 Trigger 后立即返回所选方案并视为已读取；超时以退出码 0 返回按默认方案继续的提示。
+- **`--resolves`**：批注只能由覆盖其目标区块的 `update` 闭环，带假设 ID 的批注闭环时工具移除该假设；问题的每个 `target` 由覆盖它的 `update` 或 `--no-change` 计入完成度，全部完成后删除 `.pair/decisions/<id>.md` 并写入结案记录。尚未被开发者选择并发送的问题不能被闭环；以已闭环问题的 ID 重新 `ask` 是新一轮问题，不继承上一轮的进度。
+- **`ask`**：写入或覆盖 `.pair/decisions/<id>.md`，校验 `targets` 均可解析、存在 `pw:compare` 容器且 `default_option` 是其中的选项。`--wait` 在开发者对该问题点击 Trigger 后立即返回所选方案并视为已读取（已被 `drain` 读取时同样直接返回所选方案）；`--json` 时输出一个含 `ask` 与 `wait` 两个字段的对象；超时以退出码 0 返回按默认方案继续的提示。
 - **`stage confirm`**：立即写回文件，不进入暂存区；省略 `#sec` 时确认文档的全部区块。界面上对单条撤回假设点「知晓」只清除那一条。
 
 ### 4.5 校验
 
-- **`check`**：Frontmatter 字段、ID 与文件名一致、每个 `##` 都带锚点、文件级命名空间唯一、容器成对闭合、容器内子项唯一、`@module#sec` 引用与 decision `targets` 可解析、`default_option` 有效；`sections` 中指向不存在区块的元数据报警告。
+- **`check`**：Frontmatter 字段、ID 与文件名一致、每个 `##` 都带锚点、文件级命名空间唯一、容器成对闭合、容器内子项唯一、`@module#sec` 引用可解析、decision `targets` 是不带 `@` 的 `module#sec` 且指向已有的 `##` 区块、`default_option` 有效；`sections` 中指向不存在区块的元数据报警告。
 - **`--strict`**：警告视为错误，并且存在任何 `decisions/*.md` 时报错。
 - **`--diff`**：不带参数检查暂存区（`--cached`），带 `<base-ref>` 检查 `<base-ref>...HEAD`；区间模式下扫描区间内全部提交信息中的 `Pair-Skip:` trailer。
-- **钩子**：`init --git-hooks` 写入 `prepare-commit-msg` 与 `commit-msg`，已存在的非 Pairwise 钩子不覆盖；`commit-msg` 检查通过后清除已消费的跳过原因。
+- **钩子**：`init --git-hooks` 写入 `prepare-commit-msg` 与 `commit-msg`，已存在的非 Pairwise 钩子不覆盖；`commit-msg` 检查通过后，常驻进程已在运行时清除已消费的跳过原因（不为此拉起常驻进程）。
 
 ## 5. 验收标准
 
