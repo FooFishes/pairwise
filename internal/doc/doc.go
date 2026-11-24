@@ -51,16 +51,6 @@ func (k Kind) String() string {
 	return ""
 }
 
-// KindFromDir 由目录名反查类型.
-func KindFromDir(dir string) (Kind, bool) {
-	for _, k := range []Kind{KindModule, KindFlow, KindDecision} {
-		if k.Dir() == dir {
-			return k, true
-		}
-	}
-	return 0, false
-}
-
 // Span 是 Document.Raw 中的半开区间 [Start, End).
 type Span struct {
 	Start, End int
@@ -399,8 +389,8 @@ func (f *Front) SetMeta(id string, m *SectionMeta) {
 	setMetaNode(asMapping(secs.Content[j+1]), m)
 }
 
-// Encode 把 Node 编码为含首尾 --- 分隔线的 Frontmatter 文本, 缩进为两个空格.
-// Node 为空映射时返回 nil.
+// Encode 把 Node 整段编码为含首尾 --- 分隔线的 Frontmatter 文本, 缩进为两个空格, 别名展开为副本.
+// Node 为空映射时返回 nil. 写回已有文档时用 Render 沿用原文字节.
 func (f *Front) Encode() []byte {
 	if len(f.Node.Content) == 0 {
 		return nil
@@ -409,7 +399,7 @@ func (f *Front) Encode() []byte {
 	if f.doc != nil {
 		root = *f.doc
 	}
-	root.Content = []*yaml.Node{f.Node}
+	root.Content = []*yaml.Node{expand(f.Node, nil)}
 	var b bytes.Buffer
 	b.WriteString("---\n")
 	e := yaml.NewEncoder(&b)
