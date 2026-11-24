@@ -18,6 +18,9 @@ description: 在带有 .pair/ 目录的仓库中工作时使用. 规定如何通
 1. 开始前执行 `pair drain` 读取开发者已发送的反馈. 每条反馈都带 ID, 必须在本回合闭环.
 2. 修改源码前执行 `pair lookup <path...>` 找到关联模块, 再用 `pair show <module#sec>` 读取区块原文与 base 哈希.
 3. 启用了 Hook 时, 改源码前先 `pair bind <module#sec>`; 只修缺陷、调样式或重构而不改规则时用 `pair bind <module> --preserve "<原因>"`.
+   - 本轮上下文给出 Pairwise 会话短码时, 每条 `pair` 命令都带上 `--session <短码>`.
+   - bind 报冲突说明其他会话正在改同一区块: 改为绑定不重叠的区块, 或确认不改规则后加 `--preserve`, 不要绕过.
+   - 已绑定的文档在本会话中 `pair update` 可省略 `--base`.
 4. 改完代码后更新文档:
 
    ```bash
@@ -36,6 +39,7 @@ description: 在带有 .pair/ 目录的仓库中工作时使用. 规定如何通
    - 开头的 Frontmatter 只能写 `assumptions`, 用来整体设置该区块的假设列表; 省略则假设不变.
    - 连续修改同一文档时使用上一次输出的新 base.
 5. 确认本次修改不涉及规格变更时执行 `pair skip-update --reason "<原因>"`.
+6. 启用了 Hook 时, 回合结束前若有未读或未闭环的反馈、或改了源码却没更新文档, 结束会被拦截; 按拦截原因中的命令处理即可.
 
 ## 闭环反馈
 
