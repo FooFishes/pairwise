@@ -60,10 +60,11 @@ func Run(ix *repo.Index, opts Options) []Diagnostic {
 // e 可以是尚未写入索引的文档 (如 ask 提交的问题), 只用到 Kind、ID、Doc 与 Err. 结果按行号排序.
 func Doc(ix *repo.Index, e *repo.Entry) []doc.Diagnostic {
 	if e.Doc == nil {
-		return []doc.Diagnostic{{
-			Severity: doc.SeverityError, Line: 1, Code: "parse-error", Message: e.Err.Error(),
-			Fix: "直接编辑该文件修正开头的 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 再执行 `pair check` 确认",
-		}}
+		fix := fmt.Sprintf("执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[1]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖该文件", e.ID)
+		if e.Kind == doc.KindDecision {
+			fix = fmt.Sprintf("修正问题文档后执行 `pair ask %s --file <doc.md>` 重新提交, 覆盖该文件", e.ID)
+		}
+		return []doc.Diagnostic{{Severity: doc.SeverityError, Line: 1, Code: "parse-error", Message: e.Err.Error(), Fix: fix}}
 	}
 	c := &checker{ix: ix, e: e, d: e.Doc, f: e.Doc.Front, diags: slices.Clone(e.Doc.Diags)}
 	c.id()
