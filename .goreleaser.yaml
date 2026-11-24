@@ -1,0 +1,42 @@
+version: 2
+
+project_name: pairwise
+
+before:
+  hooks:
+    - pnpm -C web install --frozen-lockfile
+    - pnpm -C web build
+
+builds:
+  - main: ./cmd/pair
+    binary: pair
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/FooFishes/pairwise/internal/daemon.Version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+homebrew_casks:
+  - name: pair
+    binaries: [pair]
+    repository:
+      owner: FooFishes
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/FooFishes/pairwise
+    description: 面向 Vibe Coding 的仓库原生实时结对工具
