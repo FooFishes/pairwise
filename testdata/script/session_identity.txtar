@@ -1,0 +1,102 @@
+# 会话身份: session-start 在宿主提供 CLAUDE_ENV_FILE 时追加 export PAIR_SESSION_ID (路径 ①, CwdChanged 同样挂到 session-start),
+# --session 默认取该变量; 没有环境文件时 prompt-submit 在本轮上下文注入会话短码 (路径 ③), --session 同时接受会话 ID 与短码;
+# after-tool 在 Bash 输出中找到 bind_id 时把尚未关联会话的绑定关联到当前会话 (路径 ④).
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+exec git add -A
+exec git commit -q -m init
+expand hook/start-s1.json hook/cwd-s1.json hook/prompt-s1.json hook/start-s2.json hook/prompt-s2.json
+
+# 路径 ①: 只追加环境文件, 不输出. 宿主在 cwd 变化时清空该文件, CwdChanged 进入子目录后重新写入.
+env CLAUDE_ENV_FILE=$WORK/claude-env.sh
+stdin hook/start-s1.json
+pair hook session-start
+! stdout .
+cmp claude-env.sh want/env.sh
+rm claude-env.sh
+stdin hook/cwd-s1.json
+pair hook session-start
+cmp claude-env.sh want/env.sh
+env CLAUDE_ENV_FILE=
+
+# 有环境文件的会话不注入短码; 会话中的命令经 PAIR_SESSION_ID 带上会话.
+stdin hook/prompt-s1.json
+pair hook prompt-submit
+! stdout .
+env PAIR_SESSION_ID=s1
+pair bind 'discover#rules'
+stdout '^已绑定 \(会话 s1\):$'
+stdout '^下一步: 本会话修改上述区块时执行 `pair update <doc#sec> <<''EOF''`, 已缓存 base, 可省略 `--base`$'
+env PAIR_SESSION_ID=
+
+# 路径 ③: 没有环境文件时不写文件, 每回合在上下文中给出短码.
+stdin hook/start-s2.json
+pair hook session-start
+! stdout .
+cmp claude-env.sh want/env.sh
+stdin hook/prompt-s2.json
+pair hook prompt-submit
+stdout '^\{"hookSpecificOutput":\{"hookEventName":"UserPromptSubmit","additionalContext":"Pairwise 会话短码 [a-z2-7]{4}: 本会话执行 pair 命令时都带上 `--session [a-z2-7]{4}`'
+grab CODE '会话短码 ([a-z2-7]{4})' stdout
+
+# 路径 ④: 漏传 --session 的绑定未关联会话, 以短码 update 时没有绑定基准; after-tool 读到 bind_id 后关联到 s2.
+pair bind 'discover#list'
+stdout '^已绑定 \(未关联会话\):$'
+grab BIND '^bind_id: (b-[0-9]+)\n' stdout
+grab BASE 'list \(base: ([0-9a-f]{12})\)' stdout
+stdin in/list.md
+! pair update 'discover#list' --session $CODE
+stderr '未提供基准哈希 `--base`'
+expand hook/after-bind-s2.json
+stdin hook/after-bind-s2.json
+pair hook after-tool
+! stdout .
+stdin in/list.md
+pair update 'discover#list' --session $CODE
+stdout '^已更新 discover#list'
+grep '列表正文已更新' .pair/modules/discover.md
+
+# --session 的短码解析为会话 ID.
+pair bind 'discover#list' --session $CODE
+stdout '^已绑定 \(会话 s2\):$'
+
+-- .gitignore --
+.tmp/
+claude-env.sh
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 规则 <!-- #rules -->
+
+规则正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/list.md --
+
+列表正文已更新.
+-- want/env.sh --
+export PAIR_SESSION_ID=s1
+-- src/discover/page.go --
+package discover
+-- hook/start-s1.json --
+{"session_id":"s1","transcript_path":"$HOME/.claude/projects/s1.jsonl","cwd":"$WORK","hook_event_name":"SessionStart","source":"startup","model":"claude-opus-5"}
+-- hook/cwd-s1.json --
+{"session_id":"s1","transcript_path":"$HOME/.claude/projects/s1.jsonl","cwd":"$WORK/src","hook_event_name":"CwdChanged","old_cwd":"$WORK","new_cwd":"$WORK/src"}
+-- hook/prompt-s1.json --
+{"session_id":"s1","transcript_path":"$HOME/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调整发现页规则"}
+-- hook/start-s2.json --
+{"session_id":"s2","transcript_path":"$HOME/.claude/projects/s2.jsonl","cwd":"$WORK","hook_event_name":"SessionStart","source":"startup"}
+-- hook/prompt-s2.json --
+{"session_id":"s2","transcript_path":"$HOME/.claude/projects/s2.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调整发现页列表"}
+-- hook/after-bind-s2.json --
+{"session_id":"s2","transcript_path":"$HOME/.claude/projects/s2.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"pair bind 'discover#list'","description":"绑定发现页列表"},"tool_response":{"stdout":"bind_id: $BIND\n已绑定 (未关联会话):\n- discover: list (base: $BASE)\n","stderr":"","interrupted":false,"isImage":false},"tool_use_id":"toolu_02"}

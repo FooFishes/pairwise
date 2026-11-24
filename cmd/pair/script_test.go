@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,12 +54,45 @@ func TestScript(t *testing.T) {
 			return nil
 		},
 		Cmds: map[string]func(ts *testscript.TestScript, neg bool, args []string){
-			"grab":  cmdGrab,
-			"http":  cmdHTTP,
-			"poll":  cmdPoll,
-			"sleep": cmdSleep,
+			"exitcode": cmdExitCode,
+			"expand":   cmdExpand,
+			"grab":     cmdGrab,
+			"http":     cmdHTTP,
+			"poll":     cmdPoll,
+			"sleep":    cmdSleep,
 		},
 	})
+}
+
+// cmdExitCode 实现 `exitcode CODE PROGRAM [ARGS...]`: 执行程序并要求退出码恰为 CODE.
+// 宿主把 Hook 的退出码 2 视为阻塞, `! pair hook` 无法区分它与 1.
+func cmdExitCode(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) < 2 {
+		ts.Fatalf("usage: exitcode CODE PROGRAM [ARGS...]")
+	}
+	want, err := strconv.Atoi(args[0])
+	ts.Check(err)
+	code := 0
+	var exit *exec.ExitError
+	if err := ts.Exec(args[1], args[2:]...); errors.As(err, &exit) {
+		code = exit.ExitCode()
+	} else {
+		ts.Check(err)
+	}
+	if code != want {
+		ts.Fatalf("%s 的退出码为 %d, 期望 %d", strings.Join(args[1:], " "), code, want)
+	}
+}
+
+// cmdExpand 实现 `expand FILE...`: 原地展开文件中的 $NAME 环境变量. 宿主 Hook 输入中的 cwd 与 file_path
+// 是绝对路径, 归档中的 JSON 须在运行时代入 $WORK.
+func cmdExpand(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) == 0 {
+		ts.Fatalf("usage: expand FILE...")
+	}
+	for _, f := range args {
+		ts.Check(os.WriteFile(ts.MkAbs(f), []byte(os.Expand(ts.ReadFile(f), ts.Getenv)), 0o644))
+	}
 }
 
 // cmdGrab 实现 `grab NAME REGEXP FILE`: 把 FILE (可以是 stdout 或 stderr) 中 REGEXP 首个分组的

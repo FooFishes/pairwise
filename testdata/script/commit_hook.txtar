@@ -1,6 +1,6 @@
 # commit-msg 钩子 (check --diff 暂存区模式): 源码命中 scope 而模块文档未改时拒绝提交并给出修复命令,
 # 带 Pair-Skip trailer 或同时改了文档时放行; ignore_globs 中的路径不受约束. 区间模式供 CI 使用.
-# prepare-commit-msg 自动追加 trailer 依赖会话阶段的 skip-update, 此处不覆盖.
+# prepare-commit-msg 按 skip-update 登记的原因自动追加 trailer, 见 skip_trailer.txtar.
 
 exec git init -q -b main
 pair init --git-hooks

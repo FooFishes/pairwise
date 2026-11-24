@@ -1,0 +1,184 @@
+# before-tool: 带 --steer 发送且尚未读取的反馈拒绝 Bash 中 pair 命令以外的工具调用, 普通发送不拒绝;
+# 编辑工具写入 .pair/** 时拒绝并给出对应的 pair 命令; 写入命中 scope 的源码而本会话未绑定该模块时以附加上下文提示 pair bind,
+# 同一模块每回合一次. 其余情况不输出, 交给宿主默认的权限流程.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+pair update pick-shop --file in/pick-shop.md
+exec git add -A
+exec git commit -q -m init
+# 宿主经符号链接进入工作树时, 尚不存在的目录中的新文件同样能定位到工作树内.
+symlink alias -> .
+expand hook/start.json hook/prompt.json hook/edit-pair.json hook/write-flow.json hook/multiedit-decision.json hook/notebook-pair.json hook/write-config.json hook/edit-src.json hook/write-new-src.json hook/edit-readme.json hook/read.json hook/bash-ls.json hook/bash-drain.json hook/bash-chain.json hook/mcp.json hook/prompt-s2.json hook/edit-pair-s2.json
+env CLAUDE_ENV_FILE=$WORK/claude-env.sh
+stdin hook/start.json
+pair hook session-start
+env CLAUDE_ENV_FILE=
+stdin hook/prompt.json
+pair hook prompt-submit
+! stdout .
+
+# 编辑工具写入 .pair/**: 拒绝, 原因中给出对应的 pair 命令.
+stdin hook/edit-pair.json
+pair hook before-tool
+stdout '^\{"hookSpecificOutput":\{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"不要直接编辑 \.pair/modules/discover\.md: '
+stdout '修复操作: 执行 `pair show discover` 读取内容与 base, 再执行 `pair update discover#<sec> --base <hash> <<''EOF''` 提交单个区块, 或 `pair update discover --base <hash> --file <doc.md>` 提交完整文档"\}\}$'
+stdin hook/write-flow.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/flows/checkout\.md: .*修复操作: 执行 `pair update checkout --kind flow --file <doc.md>` 新建"'
+stdin hook/multiedit-decision.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*修复操作: 修改问题文档后执行 `pair ask shop-policy --file <doc.md>` 重新提交"'
+stdin hook/notebook-pair.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/modules/notes/draft\.ipynb: .*该文件没有对应的 pair 命令'
+stdin hook/write-config.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/config\.toml: '
+
+# 没有环境文件的会话, 提示中的 pair 命令带上短码.
+stdin hook/prompt-s2.json
+pair hook prompt-submit
+grab CODE '会话短码 ([a-z2-7]{4})' stdout
+stdin hook/edit-pair-s2.json
+pair hook before-tool
+stdout '`pair update discover#<sec> --base <hash> --session '$CODE' <<''EOF''`'
+
+# 写入命中 scope 的源码而本会话未绑定: 附加上下文提示 pair bind, 不带权限决定; 同一模块本回合不再提示.
+stdin hook/write-new-src.json
+pair hook before-tool
+stdout '^\{"hookSpecificOutput":\{"hookEventName":"PreToolUse","additionalContext":"Pairwise: src/discover/sort/sort\.go 属于模块 discover, 本会话尚未绑定\. 修改前执行 `pair bind discover` 并用 `pair show discover` 核对规则; 只修缺陷、调样式或重构而不改规则时改用 `pair bind discover --preserve \\"<原因>\\"`\."\}\}$'
+stdin hook/edit-src.json
+pair hook before-tool
+! stdout .
+stdin hook/edit-readme.json
+pair hook before-tool
+! stdout .
+
+# 新回合再提示一次; 绑定后不再提示.
+stdin hook/prompt.json
+pair hook prompt-submit
+stdin hook/edit-src.json
+pair hook before-tool
+stdout '"additionalContext":"Pairwise: src/discover/page\.go 属于模块 discover, 本会话尚未绑定\.'
+stdin hook/prompt.json
+pair hook prompt-submit
+env PAIR_SESSION_ID=s1
+pair bind discover
+env PAIR_SESSION_ID=
+stdin hook/edit-src.json
+pair hook before-tool
+! stdout .
+
+# 普通发送的反馈不拒绝工具调用.
+pair stage note 'pick-shop#list' 列表补充营业时间
+pair trigger
+stdin hook/read.json
+pair hook before-tool
+! stdout .
+
+# 立即转向的反馈未读取: 拒绝 pair 命令以外的工具调用, 原因中给出 pair drain; Bash 中的 pair drain 放行.
+pair stage note 'discover#rules' 改为按距离排序
+pair trigger --steer
+stdin hook/read.json
+pair hook before-tool
+stdout '^\{"hookSpecificOutput":\{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"开发者发送了要求立即转向的反馈, 读取前暂停其他工具调用:\\n- \[id: fb-2\] 区块 discover#rules 的修改说明: 改为按距离排序\\n修复操作: 执行 `pair drain` 读取反馈并按其调整计划, 之后的工具调用恢复正常"\}\}$'
+! stdout 'fb-1'
+stdin hook/bash-ls.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*`pair drain`'
+stdin hook/edit-src.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*`pair drain`'
+stdin hook/bash-drain.json
+pair hook before-tool
+! stdout .
+# 以 pair 开头但串接其他命令的 Bash 不放行; 入参结构不同的 MCP 工具同样拒绝.
+stdin hook/bash-chain.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*`pair drain`'
+stdin hook/mcp.json
+pair hook before-tool
+stdout '"permissionDecision":"deny".*`pair drain`'
+
+# 新回合的上下文同样提示先读取反馈.
+stdin hook/prompt.json
+pair hook prompt-submit
+stdout '"additionalContext":"开发者已发送 2 条反馈待读取 \(fb-1, fb-2\): 先执行 `pair drain` 读取, 并在本回合闭环\."'
+
+# 读取后恢复正常.
+env PAIR_SESSION_ID=s1
+pair drain
+stdout '\[id: fb-2\]'
+env PAIR_SESSION_ID=
+stdin hook/read.json
+pair hook before-tool
+! stdout .
+
+-- .gitignore --
+.tmp/
+alias
+claude-env.sh
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 规则 <!-- #rules -->
+
+规则正文.
+-- in/pick-shop.md --
+---
+id: pick-shop
+scope:
+  - "src/pick/**"
+---
+
+# 选店页
+
+## 列表 <!-- #list -->
+
+选店页列表.
+-- src/discover/page.go --
+package discover
+-- README.md --
+# demo
+-- hook/start.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","hook_event_name":"SessionStart","source":"startup"}
+-- hook/prompt.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调整发现页"}
+-- hook/edit-pair.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/alias/.pair/modules/discover.md","old_string":"规则正文.","new_string":"规则正文, 按距离排序.","replace_all":false},"tool_use_id":"toolu_01"}
+-- hook/write-flow.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"$WORK/alias/.pair/flows/checkout.md","content":"---\nid: checkout\n---\n"},"tool_use_id":"toolu_02"}
+-- hook/multiedit-decision.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"MultiEdit","tool_input":{"file_path":"$WORK/alias/.pair/decisions/shop-policy.md","edits":[{"old_string":"opt-a","new_string":"opt-b","replace_all":false}]},"tool_use_id":"toolu_03"}
+-- hook/notebook-pair.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"$WORK/alias/.pair/modules/notes/draft.ipynb","new_source":"print(1)","cell_type":"code","edit_mode":"insert"},"tool_use_id":"toolu_04"}
+-- hook/write-config.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"$WORK/alias/.pair/config.toml","content":"ignore_globs = []\n"},"tool_use_id":"toolu_05"}
+-- hook/edit-src.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/alias/src/discover/page.go","old_string":"package discover","new_string":"package discover // sorted","replace_all":false},"tool_use_id":"toolu_06"}
+-- hook/write-new-src.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"$WORK/alias/src/discover/sort/sort.go","content":"package sort\n"},"tool_use_id":"toolu_07"}
+-- hook/edit-readme.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/alias/README.md","old_string":"# demo","new_string":"# Demo","replace_all":false},"tool_use_id":"toolu_08"}
+-- hook/read.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"$WORK/alias/src/discover/page.go"},"tool_use_id":"toolu_09"}
+-- hook/bash-ls.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls src","description":"列出源码目录","timeout":120000,"run_in_background":false},"tool_use_id":"toolu_10"}
+-- hook/bash-drain.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pair drain","description":"读取开发者反馈","timeout":120000,"run_in_background":false},"tool_use_id":"toolu_11"}
+-- hook/bash-chain.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pair drain && go test ./...","description":"读取反馈后跑测试"},"tool_use_id":"toolu_12"}
+-- hook/mcp.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK/alias","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"mcp__docker__exec","tool_input":{"container":"web","command":["ls","-l"]},"tool_use_id":"toolu_13"}
+-- hook/prompt-s2.json --
+{"session_id":"s2","transcript_path":"/home/dev/.claude/projects/s2.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调整发现页"}
+-- hook/edit-pair-s2.json --
+{"session_id":"s2","transcript_path":"/home/dev/.claude/projects/s2.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/.pair/modules/discover.md","old_string":"规则正文.","new_string":"规则正文, 按距离排序.","replace_all":false},"tool_use_id":"toolu_12"}

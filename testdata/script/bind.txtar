@@ -1,0 +1,132 @@
+# bind 为文档存下整文件 base 快照并挂在当前分支: 与其他会话的有效绑定命中同一区块 (只写文档 ID 视为全部区块) 且双方都不带
+# --preserve 时拒绝 (退出码 1, 列出冲突区块与对方短码), 其余情况记录并附带其他会话正在修改的区块; 同一会话重复 bind 以最新一次为准.
+# update 未传 --base 时取会话的绑定基准, 写入后推进到新 base; 会话结束 (SessionEnd) 时释放其绑定; 切换分支后旧分支上的绑定失效.
+# 会话经 --session 显式给出时, 输出中的命令同样带上它.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+grab BASE0 '新 base: ([0-9a-f]{12})' stdout
+exec git add -A
+exec git commit -q -m init
+expand hook/prompt-a.json hook/prompt-b.json hook/prompt-c.json hook/end-b.json
+stdin hook/prompt-a.json
+pair hook prompt-submit
+grab A '会话短码 ([a-z2-7]{4})' stdout
+stdin hook/prompt-b.json
+pair hook prompt-submit
+grab B '会话短码 ([a-z2-7]{4})' stdout
+stdin hook/prompt-c.json
+pair hook prompt-submit
+grab C '会话短码 ([a-z2-7]{4})' stdout
+
+pair bind 'discover#tabs' --session $A
+stdout '^bind_id: b-[0-9]+$'
+stdout '^- discover: tabs \(base: '$BASE0'\)$'
+stdout '^下一步: 本会话修改上述区块时执行 `pair update <doc#sec> --session '$A' <<''EOF''`, 已缓存 base, 可省略 `--base`$'
+! stdout '其他会话正在修改'
+
+# 同一区块: 拒绝, 不记录, 退出码 1.
+exitcode 1 pair bind 'discover#list' 'discover#tabs' --session $B
+! stdout .
+stderr '^拒绝绑定: 以下区块正被其他会话修改, 且双方都没有声明 --preserve, 未记录本次绑定:$'
+stderr '^- discover#tabs: 会话 '$A' 正在修改$'
+stderr '^修复操作: 改为只绑定不重叠的区块后重新执行 `pair bind <doc#sec>... --session '$B'`; 只修缺陷、调样式或重构而不改规则时执行 `pair bind discover#list discover#tabs --preserve "<原因>" --session '$B'`; 确需修改这些区块时等对方会话结束'
+
+# 不同区块: 记录, 附带对方正在修改的区块.
+pair bind 'discover#list' --session $B
+stdout '^其他会话正在修改 \(与本次绑定不冲突, 提交时按区块自动合并\):$'
+stdout '^- discover#tabs: 会话 '$A' 正在修改$'
+
+# 带 --preserve: 同一区块也记录, 原因压成一行; 之后的绑定在附带信息中看到保持规格的原因.
+pair bind 'discover#tabs' --session $C --preserve '只调  样式'
+stdout '^保持规格模式: 只调 样式; '
+stdout '^- discover#tabs: 会话 '$A' 正在修改$'
+stdout '^- discover#list: 会话 '$B' 正在修改$'
+
+# 只写文档 ID 视为全部区块: 与 A、B 冲突, 不与保持规格的 C 冲突.
+exitcode 1 pair bind discover --session d
+stderr '^- discover#tabs: 会话 '$A' 正在修改$'
+stderr '^- discover#list: 会话 '$B' 正在修改$'
+! stderr '会话 '$C
+
+# A 重新绑定 stage, 原先的 tabs 绑定随之失效: B 再绑定 tabs 不再冲突.
+pair bind 'discover#stage' --session $A
+stdout '^- discover#tabs: 会话 '$C' 正在修改 \(保持规格: 只调 样式\)$'
+pair bind 'discover#tabs' --session $B
+stdout '^- discover#stage: 会话 '$A' 正在修改$'
+! stdout 'discover#tabs: 会话 '$A
+
+# 未关联会话的一方以 BASE0 改了 list; A 省略 --base, 以绑定基准三路合并.
+stdin in/list.md
+pair update 'discover#list' --base $BASE0
+stdin in/stage-1.md
+pair update 'discover#stage' --session $A
+stdout '^已更新 discover#stage'
+grep '列表正文已更新' .pair/modules/discover.md
+grep '舞台正文第一版' .pair/modules/discover.md
+
+# 写入后绑定基准推进到新 base: 再次修改同一区块不与上一次冲突.
+stdin in/stage-2.md
+pair update 'discover#stage' --session $A
+stdout '^已更新 discover#stage'
+grep '舞台正文第二版' .pair/modules/discover.md
+
+# B 的会话结束: 其绑定释放, 其他会话再绑定 tabs 不再与 B 冲突.
+stdin hook/end-b.json
+pair hook session-end
+! stdout .
+pair bind 'discover#tabs' --session d
+! stdout 'discover#tabs: 会话 '$B
+
+# 切换分支后旧分支上的绑定失效, 切回原分支也不恢复.
+exec git checkout -q -b feature
+stdin in/stage-1.md
+! pair update 'discover#stage' --session $A
+stderr '未提供基准哈希 `--base`'
+pair bind 'discover#tabs' --session d
+! stdout '其他会话正在修改'
+exec git checkout -q main
+stdin in/stage-1.md
+! pair update 'discover#stage' --session $A
+stderr '未提供基准哈希 `--base`'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/list.md --
+
+列表正文已更新.
+-- in/stage-1.md --
+
+舞台正文第一版.
+-- in/stage-2.md --
+
+舞台正文第二版.
+-- hook/prompt-a.json --
+{"session_id":"sess-a","transcript_path":"/home/dev/.claude/projects/a.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"改舞台"}
+-- hook/prompt-b.json --
+{"session_id":"sess-b","transcript_path":"/home/dev/.claude/projects/b.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"改列表"}
+-- hook/prompt-c.json --
+{"session_id":"sess-c","transcript_path":"/home/dev/.claude/projects/c.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调样式"}
+-- hook/end-b.json --
+{"session_id":"sess-b","transcript_path":"/home/dev/.claude/projects/b.jsonl","cwd":"$WORK","hook_event_name":"SessionEnd","reason":"clear"}

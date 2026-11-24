@@ -1,0 +1,44 @@
+# Socket 位于运行目录下每用户私有的 pair-<uid> 目录 (0700) 中. 常驻进程运行时 CLI 按 daemon.json 记录的 socket 连接,
+# 不受运行目录变量影响; 未运行时私有目录权限过宽或推算的 socket 路径超出系统上限则报错并给出修复命令, 不拉起常驻进程.
+
+[!unix] skip 'socket 目录的权限只在 Unix 上检查'
+
+exec git init -q -b main
+pair init
+pair serve
+exec id -u
+grab ME '^([0-9]+)' stdout
+env SOCKDIR=$PAIR_RUNTIME_DIR/pair-$ME
+exec ls -ld $SOCKDIR
+stdout '^drwx------'
+grep '"socket":"'$SOCKDIR'/[0-9a-f]{16}\.sock"' .git/pair/daemon.json
+
+# 运行中: 运行目录变量指向超长路径也能按记录的 socket 连上.
+env RUNTIME=$PAIR_RUNTIME_DIR
+env PAIR_RUNTIME_DIR=$WORK/runtime-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+pair status
+stdout '^文档: 无$'
+pair serve --stop
+
+# 未运行: 推算的 socket 路径超出系统上限.
+exitcode 1 pair status
+! stdout .
+[darwin] stderr '^socket 路径 .* 长 [0-9]+ 字节, 加上结尾空字符超出系统上限 104 字节\.$'
+[linux] stderr '^socket 路径 .* 长 [0-9]+ 字节, 加上结尾空字符超出系统上限 108 字节\.$'
+stderr '^修复操作: 执行 `export PAIR_RUNTIME_DIR=/tmp` 改用更短的运行目录后重试$'
+! exists .git/pair/daemon.json
+! exists $PAIR_RUNTIME_DIR
+
+# 未运行: 私有目录权限过宽.
+env PAIR_RUNTIME_DIR=$RUNTIME
+chmod 0755 $SOCKDIR
+exitcode 1 pair status
+stderr '^socket 目录 .* 的权限为 755, 其他用户可以访问其中的 socket\.$'
+stderr '^修复操作: 执行 `chmod 700 .*` 后重试$'
+! exists .git/pair/daemon.json
+chmod 0700 $SOCKDIR
+pair status
+stdout '^文档: 无$'
+
+-- .gitignore --
+.tmp/

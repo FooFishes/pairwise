@@ -1,0 +1,89 @@
+# 跳过原因持久化在运行态 SQLite 中: skip-update 登记后即使常驻进程已停止, prepare-commit-msg 仍在进程内为提交追加
+# Pair-Skip trailer, commit-msg 检查通过后清除它; 两个钩子都不拉起常驻进程, 下一次提交不再带该 trailer.
+# 提交信息除 trailer 外为空时 commit-msg 中止提交并保留原因; rebase 重放的提交不追加 trailer.
+
+exec git init -q -b main
+pair init --git-hooks
+pair update discover --file in/discover.md
+exec git add -A
+exec git commit -q -m init
+
+pair skip-update --reason '只重命名  局部变量'
+stdout '^已登记跳过原因: 只重命名 局部变量$'
+stdout '^下一步: 正常提交, prepare-commit-msg 钩子将自动追加 `Pair-Skip: 只重命名 局部变量` trailer'
+pair serve --stop
+stdout '^已停止常驻进程$'
+
+# 在编辑器中放弃填写: 追加的 trailer 不使提交成立, 原因保留.
+cp in/code.txt src/discover/page.go
+exec git add src/discover/page.go
+env GIT_EDITOR=true
+! exec git commit -q
+stderr '^提交已中止: 提交信息除 Pair-Skip trailer 外为空, 跳过原因保留到下次提交\.$'
+env GIT_EDITOR=
+
+# 只改 scope 下的源码: 钩子追加 trailer 后 commit-msg 放行.
+exec git commit -q -m 'rename var'
+exec git log -1 --format=%B
+cmp stdout want/msg.txt
+! exists .git/pair/daemon.json
+
+# 原因已清除: 下一次提交不带 trailer, 再只改 scope 下的源码时被拒绝.
+cp in/readme.md README.md
+exec git add README.md
+exec git commit -q -m 'readme'
+exec git log -1 --format=%B
+! stdout 'Pair-Skip'
+cp in/code2.txt src/discover/page.go
+exec git add src/discover/page.go
+! exec git commit -q -m 'sort'
+stderr '\[doc-not-updated\] 模块「discover」scope 下的源码有改动, 但模块文档未更新: src/discover/page.go$'
+! exists .git/pair/daemon.json
+
+# rebase 重放的提交沿用原提交信息, 不追加 trailer; 原因留给之后的提交.
+exec git reset -q --hard
+exec git checkout -q -b feat HEAD~1
+cp in/readme.md NOTES.md
+exec git add NOTES.md
+exec git commit -q -m notes
+pair skip-update --reason 只调样式
+exec git rebase -q main
+exec git log -1 --format=%B
+! stdout 'Pair-Skip'
+exec git commit -q --allow-empty -m next
+exec git log -1 --format=%B
+stdout '^Pair-Skip: 只调样式$'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 规则 <!-- #rules -->
+
+规则正文.
+-- in/code.txt --
+package discover
+
+var renamed = 1
+-- in/code2.txt --
+package discover
+
+func Sort() {}
+-- in/readme.md --
+# Demo
+-- want/msg.txt --
+rename var
+
+Pair-Skip: 只重命名 局部变量
+
+-- src/discover/page.go --
+package discover
+-- README.md --
+# demo

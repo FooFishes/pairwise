@@ -1,0 +1,58 @@
+# pair hook 永远不以退出码 2 结束 (宿主视为阻塞): 不在已初始化的工作树中时静默放行; 输入无法解析、事件未知或常驻进程不可用时
+# 以 1 结束并把原因写到 stderr (宿主显示为非阻塞错误). 常驻进程未运行时与其他命令一样自动拉起.
+
+expand hook/stop.json hook/bad-session.json
+
+# 不在 Git 仓库中, 以及未初始化的工作树: 无论输入如何都静默放行.
+stdin hook/stop.json
+exitcode 0 pair hook before-stop
+! stdout .
+! stderr .
+exec git init -q -b main
+stdin hook/garbage.txt
+exitcode 0 pair hook before-stop
+! stdout .
+! stderr .
+exitcode 0 pair hook prompt-submit
+! exists .git/pair
+
+# 已初始化: 无法解析的输入与未知事件以 1 结束. 会话 ID 会写入环境文件, 含 shell 元字符时同样拒绝.
+pair init
+stdin hook/garbage.txt
+exitcode 1 pair hook before-stop
+! stdout .
+stderr '^pair hook: 宿主 Hook 输入不是合法的 JSON: '
+stdin hook/bad-session.json
+exitcode 1 pair hook session-start
+stderr '^pair hook: 宿主 Hook 输入的 session_id "s1; touch pwned" 为空或含有不允许的字符$'
+stdin hook/stop.json
+exitcode 1 pair hook stop
+stderr '^pair hook: 需要恰好一个事件参数: session-start, prompt-submit, before-tool, after-tool, before-stop, session-end$'
+exitcode 1 pair hook before-stop --json
+stderr '^pair hook: 需要恰好一个事件参数'
+
+# 常驻进程未运行: 自动拉起并正常处理.
+! exists .git/pair/daemon.json
+stdin hook/stop.json
+exitcode 0 pair hook before-stop
+! stdout .
+exists .git/pair/daemon.json
+
+# 常驻进程不可用 (停止后按当前环境推算的 socket 路径超出系统上限): 以 1 结束, 不拉起常驻进程.
+pair serve --stop
+env PAIR_RUNTIME_DIR=$WORK/runtime-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+stdin hook/stop.json
+exitcode 1 pair hook before-stop
+! stdout .
+stderr '^pair hook: socket 路径 .* 长 [0-9]+ 字节, 加上结尾空字符超出系统上限 [0-9]+ 字节\.$'
+stderr '^修复操作: 执行 `export PAIR_RUNTIME_DIR=/tmp` 改用更短的运行目录后重试$'
+! exists .git/pair/daemon.json
+
+-- .gitignore --
+.tmp/
+-- hook/stop.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"已完成."}
+-- hook/bad-session.json --
+{"session_id":"s1; touch pwned","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","hook_event_name":"SessionStart","source":"startup"}
+-- hook/garbage.txt --
+not json

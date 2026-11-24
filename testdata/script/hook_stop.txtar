@@ -1,0 +1,166 @@
+# before-stop 按三步判断: 已发送尚未读取的反馈; 本回合读取过但未闭环的反馈; 本回合改过命中 scope 的源码而模块既没有 update 或 ask,
+# 也没有 skip-update (绑定带 --preserve 时放行并登记其原因为跳过原因). 同一原因一个回合只拦截一次, 再次结束时放行并记为会话的
+# 待核对原因, 下一回合开始时清空; 新发送的反馈产生新原因. after-tool 记录编辑工具改过的源码路径.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+exec git add -A
+exec git commit -q -m init
+expand hook/start.json hook/prompt.json hook/stop.json hook/stop-again.json hook/edit-src.json hook/edit-readme.json hook/edit-pair.json
+env CLAUDE_ENV_FILE=$WORK/claude-env.sh
+stdin hook/start.json
+pair hook session-start
+env CLAUDE_ENV_FILE=
+env PAIR_SESSION_ID=s1
+stdin hook/prompt.json
+pair hook prompt-submit
+stdin hook/stop.json
+pair hook before-stop
+! stdout .
+
+# 第一步: 已发送尚未读取的反馈.
+pair stage note 'discover#rules' 改为按距离排序
+pair trigger
+stdin hook/stop.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"开发者已发送以下反馈, 尚未读取:\\n- \[id: fb-1\] 区块 discover#rules 的修改说明: 改为按距离排序\\n修复操作: 执行 `pair drain` 读取, 按反馈修改后在本回合执行 `pair update <module#sec> --base <hash> --resolves <id>` 逐条闭环"\}$'
+
+# 第二步: 本回合读取过的反馈仍未闭环, 列出剩余目标.
+pair drain
+stdin hook/stop.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"本回合读取的以下反馈尚未闭环:\\n- \[id: fb-1\] 剩余目标: discover#rules\\n修复操作: 对剩余目标执行 `pair update <module#sec> --base <hash> --resolves <id>`; '
+
+# 闭环后放行.
+pair bind discover
+stdin in/rules.md
+pair update 'discover#rules' --resolves fb-1
+stdout '^已闭环: fb-1$'
+stdin hook/stop.json
+pair hook before-stop
+! stdout .
+
+# 第三步: 改过 scope 下的源码而文档未更新; .pair/ 与 scope 外的文件不计入. skip-update 后放行.
+stdin hook/prompt.json
+pair hook prompt-submit
+stdin hook/edit-src.json
+pair hook after-tool
+! stdout .
+stdin hook/edit-readme.json
+pair hook after-tool
+stdin hook/edit-pair.json
+pair hook after-tool
+stdin hook/stop.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"本回合修改了以下模块 scope 下的源码, 但模块文档未更新:\\n- discover: src/discover/page\.go\\n修复操作: 涉及规则变更时执行 `pair show discover` 核对后用 `pair update discover#<sec> --base <hash>` 同步文档; 确认不涉及规格变更时执行 `pair skip-update --reason \\"<原因>\\"`"\}$'
+pair skip-update --reason 只重命名局部变量
+stdin hook/stop.json
+pair hook before-stop
+! stdout .
+
+# 绑定带 --preserve: 不拦截, 其原因登记为跳过原因, 由 prepare-commit-msg 追加 trailer.
+stdin hook/prompt.json
+pair hook prompt-submit
+pair bind discover --preserve 只调样式
+stdin hook/edit-src.json
+pair hook after-tool
+stdin hook/stop.json
+pair hook before-stop
+! stdout .
+pair git-hook prepare-commit-msg in/msg.txt
+cmp in/msg.txt want/msg.txt
+
+# 同一原因只拦截一次: 第二次结束放行, 会话置为 idle 并记下待核对原因.
+pair bind discover
+stdin hook/prompt.json
+pair hook prompt-submit
+stdin hook/edit-src.json
+pair hook after-tool
+stdin hook/stop.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"本回合修改了以下模块 scope 下的源码'
+stdin hook/stop-again.json
+pair hook before-stop
+! stdout .
+pair serve
+grab PORT 'http://127\.0\.0\.1:([0-9]+)/' stdout
+grab TOKEN '\?token=([A-Z0-9]+)' stdout
+http GET http://127.0.0.1:$PORT/?token=$TOKEN
+grab COOKIE 'Set-Cookie: ([^;]+);' stdout
+env SESSIONS=http://127.0.0.1:$PORT/pair.v1.PairService/ListSessions
+http -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $SESSIONS '{}'
+stdout '"id":\s*"s1"'
+stdout '"state":\s*"idle"'
+stdout '"unverified":\s*"模块 discover 的源码已修改但文档未更新"'
+
+# 原因哈希包含反馈 ID: 同一批反馈只拦截一次, 新发送的反馈产生新原因, 同一回合内再次拦截.
+pair stage note 'discover#rules' 距离相同时按评分排序
+pair trigger
+stdin hook/stop-again.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"开发者已发送以下反馈, 尚未读取:\\n- \[id: fb-2\] '
+stdin hook/stop-again.json
+pair hook before-stop
+! stdout .
+pair stage note 'discover#rules' 评分相同时按距离排序
+pair trigger
+stdin hook/stop-again.json
+pair hook before-stop
+stdout '^\{"decision":"block","reason":"开发者已发送以下反馈, 尚未读取:\\n- \[id: fb-2\] .*\\n- \[id: fb-3\] '
+
+# 宿主上报的状态与能力; 下一回合开始时清空待核对原因, 状态置为 running.
+pair session state waiting --capabilities ask-wait
+stdout '^会话 s1 状态: waiting$'
+http -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $SESSIONS '{}'
+stdout '"state":\s*"waiting"'
+stdout '"capabilities":\s*\[\s*"ask-wait"\s*\]'
+stdin hook/prompt.json
+pair hook prompt-submit
+http -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $SESSIONS '{}'
+stdout '"state":\s*"running"'
+! stdout 'unverified'
+
+-- .gitignore --
+.tmp/
+claude-env.sh
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 规则 <!-- #rules -->
+
+规则正文.
+-- in/rules.md --
+
+规则正文, 按距离排序.
+-- in/msg.txt --
+调整发现页样式
+-- want/msg.txt --
+调整发现页样式
+
+Pair-Skip: 只重命名局部变量
+Pair-Skip: 只调样式
+-- src/discover/page.go --
+package discover
+-- README.md --
+# demo
+-- hook/start.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","hook_event_name":"SessionStart","source":"startup"}
+-- hook/prompt.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"调整发现页"}
+-- hook/stop.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"已完成."}
+-- hook/stop-again.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"已完成."}
+-- hook/edit-src.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/src/discover/page.go","old_string":"package discover","new_string":"package discover // sorted","replace_all":false},"tool_response":{"filePath":"$WORK/src/discover/page.go","success":true},"tool_use_id":"toolu_01"}
+-- hook/edit-readme.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"$WORK/README.md","content":"# Demo\n"},"tool_response":{"filePath":"$WORK/README.md","type":"update"},"tool_use_id":"toolu_02"}
+-- hook/edit-pair.json --
+{"session_id":"s1","transcript_path":"/home/dev/.claude/projects/s1.jsonl","cwd":"$WORK","permission_mode":"default","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"$WORK/.pair/config.toml","old_string":"a","new_string":"b","replace_all":false},"tool_response":{"filePath":"$WORK/.pair/config.toml","success":true},"tool_use_id":"toolu_03"}
