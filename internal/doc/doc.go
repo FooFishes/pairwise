@@ -5,7 +5,13 @@
 package doc
 
 import (
-	_ "github.com/yuin/goldmark"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"slices"
+	"strings"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -92,6 +98,8 @@ type Front struct {
 	SectionOrder []string
 	// Node 是 Frontmatter 的映射节点, 文档没有 Frontmatter 时为空映射.
 	Node *yaml.Node
+	// doc 是解析出的文档节点, 携带首个键之前的注释, 编码时用它包裹 Node.
+	doc *yaml.Node
 }
 
 // Status 是区块的确认状态.
@@ -211,12 +219,27 @@ type Document struct {
 
 // Parse 解析一份文档. Frontmatter 不是合法 YAML 时返回错误, 其余语法问题记入 Diags.
 func Parse(raw []byte, kind Kind) (*Document, error) {
-	panic("TODO")
+	text, end, err := splitFront(raw)
+	if err != nil {
+		return nil, err
+	}
+	front, err := ParseFront(text)
+	if err != nil {
+		return nil, err
+	}
+	d := &Document{Raw: raw, Kind: kind, Front: front, FrontEnd: end}
+	newParser(d).parse()
+	return d, nil
 }
 
 // Section 按 ID 查找区块, 不存在时返回 nil.
 func (d *Document) Section(id string) *Section {
-	panic("TODO")
+	for _, s := range d.Sections {
+		if id != "" && s.ID == id {
+			return s
+		}
+	}
+	return nil
 }
 
 // Text 返回区间对应的原文.
@@ -226,61 +249,192 @@ func (d *Document) Text(s Span) []byte {
 
 // Meta 返回区块的确认元数据, 没有时返回 nil.
 func (d *Document) Meta(id string) *SectionMeta {
-	panic("TODO")
+	return d.Front.Sections[id]
 }
 
 // Status 根据 confirmed_hash 计算区块的确认状态.
 func (d *Document) Status(s *Section) Status {
-	panic("TODO")
+	m := d.Meta(s.ID)
+	switch {
+	case m == nil || m.ConfirmedHash == "":
+		return StatusUnconfirmed
+	case m.ConfirmedHash == s.Hash:
+		return StatusConfirmed
+	}
+	return StatusChanged
 }
 
 // Item 按容器 ID 与子项 ID 在全文中查找子项, 不存在时返回 nil.
 func (d *Document) Item(container, id string) *Item {
-	panic("TODO")
+	c := d.Container(container)
+	if c == nil || id == "" {
+		return nil
+	}
+	for i := range c.Items {
+		if c.Items[i].ID == id {
+			return &c.Items[i]
+		}
+	}
+	return nil
 }
 
 // Container 按 ID 在全文中查找容器块, 不存在时返回 nil.
 func (d *Document) Container(id string) *Block {
-	panic("TODO")
+	if id == "" {
+		return nil
+	}
+	groups := [][]Block{d.PreambleBlocks}
+	for _, s := range d.Sections {
+		groups = append(groups, s.Blocks)
+	}
+	for _, bs := range groups {
+		for i := range bs {
+			if bs[i].ID == id {
+				return &bs[i]
+			}
+		}
+	}
+	return nil
 }
 
 // Normalize 按确认哈希的归一化规则处理文本: 统一换行符为 \n, 去除行尾空白与首尾空行,
 // 严格保留行首缩进与正文空白.
 func Normalize(b []byte) []byte {
-	panic("TODO")
+	lines := bytes.Split(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), []byte("\n"))
+	for i, l := range lines {
+		lines[i] = bytes.TrimRightFunc(l, unicode.IsSpace)
+	}
+	for len(lines) > 0 && len(lines[0]) == 0 {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
+	return bytes.Join(lines, []byte("\n"))
 }
 
 // Hash 返回归一化后内容的 SHA-256 前 12 位十六进制, 用作 confirmed_hash.
 func Hash(b []byte) string {
-	panic("TODO")
+	return FileHash(Normalize(b))
 }
 
 // FileHash 返回文件原始字节的 SHA-256 前 12 位十六进制, 用作 --base.
 func FileHash(raw []byte) string {
-	panic("TODO")
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // ParseFront 解析不含 --- 分隔线的 Frontmatter 文本.
 func ParseFront(text []byte) (*Front, error) {
-	panic("TODO")
+	var root yaml.Node
+	if err := yaml.Unmarshal(text, &root); err != nil {
+		return nil, fmt.Errorf("Frontmatter 不是合法的 YAML: %w", err)
+	}
+	f := &Front{Node: &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}}
+	if root.Kind == yaml.DocumentNode {
+		f.doc = &root
+		if len(root.Content) > 0 {
+			f.Node = root.Content[0]
+		}
+	}
+	if f.Node.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("Frontmatter 必须是 YAML 映射")
+	}
+	var v struct {
+		ID            string                  `yaml:"id"`
+		Scope         []string                `yaml:"scope"`
+		Targets       []string                `yaml:"targets"`
+		DefaultOption string                  `yaml:"default_option"`
+		Sections      map[string]*SectionMeta `yaml:"sections"`
+	}
+	if err := f.Node.Decode(&v); err != nil {
+		return nil, fmt.Errorf("Frontmatter 字段类型不正确: %w", err)
+	}
+	f.ID, f.Scope, f.Targets, f.DefaultOption, f.Sections = v.ID, v.Scope, v.Targets, v.DefaultOption, v.Sections
+	if i := mapIndex(f.Node, "sections"); i >= 0 {
+		secs := f.Node.Content[i+1]
+		for j := 0; j+1 < len(secs.Content); j += 2 {
+			f.SectionOrder = append(f.SectionOrder, secs.Content[j].Value)
+		}
+	}
+	return f, nil
 }
 
 // SetMeta 设置区块的确认元数据并同步到 Node; m 为空元数据时从 sections 表中移除该区块.
 // 新区块追加在 sections 表末尾, 已有区块保留原位置.
 func (f *Front) SetMeta(id string, m *SectionMeta) {
-	panic("TODO")
+	i := mapIndex(f.Node, "sections")
+	if m.Empty() {
+		delete(f.Sections, id)
+		f.SectionOrder = slices.DeleteFunc(f.SectionOrder, func(s string) bool { return s == id })
+		if i < 0 {
+			return
+		}
+		secs := f.Node.Content[i+1]
+		if j := mapIndex(secs, id); j >= 0 {
+			secs.Content = slices.Delete(secs.Content, j, j+2)
+		}
+		if len(secs.Content) == 0 {
+			f.Node.Content = slices.Delete(f.Node.Content, i, i+2)
+		}
+		return
+	}
+	if f.Sections == nil {
+		f.Sections = map[string]*SectionMeta{}
+	}
+	f.Sections[id] = m
+	if !slices.Contains(f.SectionOrder, id) {
+		f.SectionOrder = append(f.SectionOrder, id)
+	}
+	if i < 0 {
+		f.Node.Content = append(f.Node.Content, plain("sections"), &yaml.Node{})
+		i = len(f.Node.Content) - 2
+	}
+	secs := asMapping(f.Node.Content[i+1])
+	j := mapIndex(secs, id)
+	if j < 0 {
+		secs.Content = append(secs.Content, plain(id), &yaml.Node{})
+		j = len(secs.Content) - 2
+	}
+	setMetaNode(asMapping(secs.Content[j+1]), m)
 }
 
 // Encode 把 Node 编码为含首尾 --- 分隔线的 Frontmatter 文本, 缩进为两个空格.
 // Node 为空映射时返回 nil.
 func (f *Front) Encode() []byte {
-	panic("TODO")
+	if len(f.Node.Content) == 0 {
+		return nil
+	}
+	root := yaml.Node{Kind: yaml.DocumentNode}
+	if f.doc != nil {
+		root = *f.doc
+	}
+	root.Content = []*yaml.Node{f.Node}
+	var b bytes.Buffer
+	b.WriteString("---\n")
+	e := yaml.NewEncoder(&b)
+	e.SetIndent(2)
+	// 节点树来自解析或本包构造, 编码失败只可能是程序缺陷.
+	if err := e.Encode(&root); err != nil {
+		panic(err)
+	}
+	b.WriteString("---\n")
+	return b.Bytes()
 }
 
-// Assemble 依次拼接 Frontmatter 与正文片段. 片段之间缺少空行时补齐一个空行,
-// 末尾保证以单个换行结束; 已经符合要求的片段字节不变.
+// Assemble 依次拼接 Frontmatter 与正文片段, 前一段不以换行结尾时补一个换行, 其余字节原样保留.
 func Assemble(front []byte, chunks ...[]byte) []byte {
-	panic("TODO")
+	out := slices.Clone(front)
+	for _, c := range chunks {
+		if len(c) == 0 {
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1] != '\n' {
+			out = append(out, '\n')
+		}
+		out = append(out, c...)
+	}
+	return out
 }
 
 // SectionInput 是 pair update doc#sec 的输入.
@@ -297,5 +451,48 @@ type SectionInput struct {
 
 // ParseSectionInput 解析区块输入: 可选的只含 assumptions 的 Frontmatter, 可选的 ## 标题行, 其后为正文.
 func ParseSectionInput(b []byte) (*SectionInput, error) {
-	panic("TODO")
+	text, end, err := splitFront(b)
+	if err != nil {
+		return nil, err
+	}
+	in := &SectionInput{}
+	if end > 0 {
+		f, err := ParseFront(text)
+		if err != nil {
+			return nil, err
+		}
+		for i := 0; i < len(f.Node.Content); i += 2 {
+			if k := f.Node.Content[i].Value; k != "assumptions" {
+				return nil, fmt.Errorf("区块输入的 Frontmatter 只能包含 assumptions, 不能包含 %s", k)
+			}
+		}
+		var v struct {
+			Assumptions []Assumption `yaml:"assumptions"`
+		}
+		if err := f.Node.Decode(&v); err != nil {
+			return nil, fmt.Errorf("assumptions 格式不正确, 应为 id 与 text 组成的列表: %w", err)
+		}
+		in.HasAssumptions, in.Assumptions = len(f.Node.Content) > 0, v.Assumptions
+	}
+	rest := b[end:]
+	i := 0
+	for i < len(rest) {
+		line, next := nextLine(rest, i)
+		if len(bytes.TrimSpace(line)) > 0 {
+			break
+		}
+		i = next
+	}
+	line, next := nextLine(rest, i)
+	if m := atxRe.FindSubmatch(line); m != nil && len(m[1]) == 2 {
+		in.Heading = rest[i:next]
+		if !bytes.HasSuffix(in.Heading, []byte("\n")) {
+			in.Heading = append(slices.Clone(in.Heading), '\n')
+		}
+		_, in.HeadingID = splitAnchor(strings.TrimSpace(string(m[2])))
+		in.Body = rest[next:]
+		return in, nil
+	}
+	in.Body = rest
+	return in, nil
 }
