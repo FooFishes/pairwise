@@ -74,7 +74,11 @@ func TestMergeClean(t *testing.T) {
 		{"只有 ours 改", baseDoc, ours, baseDoc, ours},
 		{"只有 theirs 改", baseDoc, baseDoc, theirs, theirs},
 		{"不同区块各改", baseDoc, ours, theirs, strings.Replace(ours, "列表正文", "列表正文 theirs 改", 1)},
-		{"只改空白不算改动", baseDoc, ours, strings.Replace(baseDoc, "分类正文\n", "分类正文   \n", 1), ours},
+		{"行尾空格的硬换行也是改动", baseDoc, ours, strings.Replace(baseDoc, "分类正文\n", "分类正文  \n", 1),
+			strings.Replace(ours, "分类正文\n", "分类正文  \n", 1)},
+		{"只差换行符与空行不算改动", baseDoc, ours, strings.Replace(strings.Replace(baseDoc, "分类正文\n", "分类正文 \r\n", 1), "列表正文\n", "列表正文\n\n\n", 1), ours},
+		{"两侧只差行尾空白不算冲突", baseDoc, strings.Replace(baseDoc, "分类正文\n", "分类正文 \n", 1), strings.Replace(baseDoc, "分类正文\n", "分类正文\t\n", 1),
+			strings.Replace(baseDoc, "分类正文\n", "分类正文 \n", 1)},
 		{"theirs 删除未改区块", baseDoc, ours, strings.Replace(baseDoc, "## 分类栏 <!-- #tabs -->\n分类正文\n\n", "", 1),
 			strings.Replace(ours, "## 分类栏 <!-- #tabs -->\n分类正文\n\n", "", 1)},
 		{"theirs 改标题文字", baseDoc, ours, strings.Replace(baseDoc, "## 列表 <!-- #list -->", "## 推荐列表 <!-- #list -->", 1),
@@ -152,8 +156,7 @@ func TestMergeFrontAdjacent(t *testing.T) {
 		t.Fatalf("conflicts = %q", wheres(r))
 	}
 	want := strings.Replace(ours, "    confirmed_hash: '3b91e04d77a1'\n", "    confirmed_hash: '3b91e04d77a1'\n    assumptions:\n      - id: shared-sort\n        text: 共用排序\n", 1)
-	// Frontmatter 有改动时重新编码, 注释与引号风格保留, 注释前的对齐空白由 yaml 编码器统一为一个空格.
-	want = strings.Replace(want, "discover   # 模块", "discover # 模块", 1)
+	// 只有 sections 重新编码, id 行注释前的对齐空白与 scope 的引号风格原样保留.
 	if string(r.Raw) != want {
 		t.Errorf("raw =\n%s\nwant\n%s", r.Raw, want)
 	}
@@ -229,5 +232,53 @@ func TestMergeIdentityKeepsBytes(t *testing.T) {
 		if r := merge3(t, raw, raw, raw); string(r.Raw) != raw || len(r.Conflicts) != 0 {
 			t.Errorf("Merge3(x, x, x) = %q, want %q", r.Raw, raw)
 		}
+	}
+}
+
+// ours 未改动时合并结果应与 theirs 字节相同: 换行符、区块间空行、区块顺序与 Frontmatter 排版都取自 theirs.
+func TestMergeTakesTheirsBytes(t *testing.T) {
+	crlf := "---\r\nid: m\r\n---\r\n# T\r\n\r\n## A <!-- #a -->\r\na1\r\n\r\n## B <!-- #b -->\r\nb1\r\n"
+	compact := "# T\n## A <!-- #a -->\na1\n## B <!-- #b -->\nb1\n"
+	abc := "# T\n\n## A <!-- #a -->\na1\n\n## B <!-- #b -->\nb1\n\n## C <!-- #c -->\nc1\n"
+	indented := "---\nid: m   # 模块\nscope:\n    - src/a/**\nsections:\n    a:\n        assumptions:\n            -   id: x1\n                text: 'one'\n---\n# T\n"
+	tests := []struct{ name, base, theirs string }{
+		{"CRLF 改正文", crlf, strings.Replace(crlf, "a1", "a2", 1)},
+		{"CRLF 删除区块", crlf, strings.Replace(crlf, "## B <!-- #b -->\r\nb1\r\n", "", 1)},
+		{"区块间无空行", compact, strings.Replace(compact, "a1", "a2", 1)},
+		{"调整区块顺序", abc, "# T\n\n## B <!-- #b -->\nb1\n\n## A <!-- #a -->\na1\n\n## C <!-- #c -->\nc1\n"},
+		{"Frontmatter 四空格缩进", indented, strings.Replace(indented, "src/a/**", "src/b/**", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := merge3(t, tt.base, tt.base, tt.theirs)
+			if len(r.Conflicts) != 0 || string(r.Raw) != tt.theirs {
+				t.Errorf("conflicts = %q, raw = %q, want %q", wheres(r), r.Raw, tt.theirs)
+			}
+		})
+	}
+}
+
+func TestMergeOrderConflict(t *testing.T) {
+	base := "## a <!-- #a -->\nA\n\n## b <!-- #b -->\nB\n\n## c <!-- #c -->\nC\n"
+	ours := "## c <!-- #c -->\nC\n\n## a <!-- #a -->\nA\n\n## b <!-- #b -->\nB\n"
+	theirs := "## b <!-- #b -->\nB\n\n## a <!-- #a -->\nA\n\n## c <!-- #c -->\nC\n"
+	if r := merge3(t, base, ours, theirs); !slices.Equal(wheres(r), []string{"order"}) {
+		t.Errorf("where = %q", wheres(r))
+	}
+}
+
+// 两侧各取一部分节点时, theirs 中引用 ours 未保留的锚点的别名应被展开, 结果仍是合法 YAML.
+func TestMergeExpandsAliases(t *testing.T) {
+	base := "---\nid: m\nscope: [src/**]\nnote: 旧\n---\n"
+	ours := "---\nid: m\nscope: [src/**]\nnote: 新\n---\n"
+	theirs := "---\nid: m\nscope: &s [src/**]\nextra: *s\nnote: 旧\n---\n"
+	r := merge3(t, base, ours, theirs)
+	d := parse(t, string(r.Raw))
+	var v struct {
+		Extra []string `yaml:"extra"`
+		Note  string   `yaml:"note"`
+	}
+	if err := d.Front.Node.Decode(&v); err != nil || !slices.Equal(v.Extra, []string{"src/**"}) || v.Note != "新" {
+		t.Errorf("raw = %q, front = %+v, err = %v", r.Raw, v, err)
 	}
 }
