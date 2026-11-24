@@ -44,7 +44,7 @@ func (t *text) diag(d *pairv1.Diagnostic) {
 	}
 	t.line("%s: %s [%s] %s", loc, sev, d.Code, d.Message)
 	if d.Fix != "" {
-		t.line("  修复: %s", d.Fix)
+		t.line("  修复操作: %s", d.Fix)
 	}
 }
 
@@ -119,7 +119,7 @@ func statusText(res *pairv1.StatusResponse) string {
 		t.line("校验: %s", c)
 	}
 	if res.UiUrl != "" {
-		t.line("界面: %s", res.UiUrl)
+		t.line("界面: 常驻进程已开放工作台, 执行 `pair serve` 获取带一次性访问令牌的地址")
 	}
 
 	var next []string
@@ -181,10 +181,15 @@ func listText(res *pairv1.ListDocsResponse, kind pairv1.DocKind) string {
 			}
 		}
 	}
-	if len(res.Docs) == 0 {
-		t.line("下一步: 用 `pair update <id> --kind module --file <doc.md>` 创建文档")
-	} else {
+	switch {
+	case len(res.Docs) > 0:
 		t.line("下一步: 执行 `pair show <id>` 查看内容与 base 哈希")
+	case kind == pairv1.DocKind_DOC_KIND_DECISION:
+		t.line("下一步: 暂无待确认问题; 遇到需要开发者决策的设计取舍时用 `pair ask <id> --file <doc.md>` 提交")
+	case kind == pairv1.DocKind_DOC_KIND_FLOW:
+		t.line("下一步: 用 `pair update <id> --kind flow --file <doc.md>` 创建流程, 执行 `pair list` 查看全部文档")
+	default:
+		t.line("下一步: 用 `pair update <id> --kind module --file <doc.md>` 创建模块")
 	}
 	return t.String()
 }
@@ -198,9 +203,15 @@ func showText(res *pairv1.ShowResponse) string {
 	t.line("")
 	d := res.GetDoc()
 	t.line("base: %s (%s 的整文件哈希)", res.Base, d.GetPath())
+	// 无法解析的文档不能经 update 合并, 只能直接修正文件.
+	if i := slices.IndexFunc(d.GetDiagnostics(), func(g *pairv1.Diagnostic) bool { return g.Code == "parse-error" }); i >= 0 {
+		t.line("该文件无法解析: %s", d.Diagnostics[i].Message)
+		t.line("下一步: 直接编辑 %s 修正 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 再执行 `pair check` 确认", d.GetPath())
+		return t.String()
+	}
 	if d.GetKind() == pairv1.DocKind_DOC_KIND_DECISION {
-		if dec := d.GetDecision(); len(dec.GetProgress()) > 0 {
-			t.line("目标进度: %s", progressText(dec.Progress))
+		if dec := d.GetDecision(); len(dec.GetTargets()) > 0 {
+			t.line("目标进度: %s", progressText(dec.Targets, dec.Progress))
 		}
 		t.line("下一步: 修改该问题后执行 `pair ask %s --file <doc.md>` 重新提交", d.GetId())
 		return t.String()
@@ -232,6 +243,8 @@ func lookupText(res *pairv1.LookupResponse) string {
 	var matched, unmatched bool
 	for _, r := range res.Results {
 		switch {
+		case r.Path == ".." || strings.HasPrefix(r.Path, "../"):
+			t.line("%s: 不在当前工作树内, 与本仓库的模块文档无关", r.Path)
 		case r.Ignored:
 			t.line("%s: 已被 config.toml 的 ignore_globs 忽略, 不受 `pair check --diff` 约束", r.Path)
 		case len(r.Docs) == 0:
@@ -256,7 +269,7 @@ func lookupText(res *pairv1.LookupResponse) string {
 		t.line("下一步: 未命中的源码若属于新的子系统, 用 `pair update <id> --kind module --file <doc.md>` 新建模块并在 scope 中覆盖它")
 	}
 	if !matched && !unmatched {
-		t.line("下一步: 被忽略的源码无需同步文档")
+		t.line("下一步: 这些路径无需同步文档")
 	}
 	return t.String()
 }
@@ -285,7 +298,7 @@ func askText(res *pairv1.AskResponse, wait bool) string {
 	t.line("受影响目标: %s", strings.Join(dec.GetTargets(), ", "))
 	t.line("候选方案: %s; 默认方案 %s", optionsText(dec.GetOptions()), dec.GetDefaultOption())
 	if res.UiUrl != "" {
-		t.line("工作台: %s", res.UiUrl)
+		t.line("工作台: 开发者执行 `pair serve --open` 打开后可查看对比卡片并选择")
 	}
 	if wait {
 		t.line("正在等待开发者确认...")
@@ -365,15 +378,18 @@ func drainText(res *pairv1.DrainResponse) string {
 	return t.String()
 }
 
-var progressNames = map[string]string{"pending": "待更新", "updated": "已更新", "no_change": "已核对 · 无需改动"}
+var progressNames = map[string]string{"updated": "已更新", "no_change": "已核对 · 无需改动"}
 
-// progressText 返回 "discover#list 已更新; pick-shop#list 待更新" 形式的目标进度.
-func progressText(ps []*pairv1.TargetProgress) string {
+// progressText 返回 "discover#list 已更新; pick-shop#list 待更新" 形式的目标进度, 没有进度记录的目标为待更新.
+func progressText(targets []string, ps []*pairv1.TargetProgress) string {
 	var parts []string
-	for _, p := range ps {
-		s := p.Target + " " + progressNames[p.Status]
-		if p.Reason != "" {
-			s += " (" + p.Reason + ")"
+	for _, target := range targets {
+		s := target + " 待更新"
+		if i := slices.IndexFunc(ps, func(p *pairv1.TargetProgress) bool { return p.Target == target }); i >= 0 {
+			s = target + " " + progressNames[ps[i].Status]
+			if ps[i].Reason != "" {
+				s += " (" + ps[i].Reason + ")"
+			}
 		}
 		parts = append(parts, s)
 	}
@@ -382,14 +398,9 @@ func progressText(ps []*pairv1.TargetProgress) string {
 
 // pendingTargets 返回问题尚未更新或显式结案的目标.
 func pendingTargets(f *pairv1.Feedback) []string {
-	var out []string
-	for _, target := range f.Targets {
-		i := slices.IndexFunc(f.Progress, func(p *pairv1.TargetProgress) bool { return p.Target == target })
-		if i < 0 || f.Progress[i].Status == "pending" {
-			out = append(out, target)
-		}
-	}
-	return out
+	return slices.DeleteFunc(slices.Clone(f.Targets), func(target string) bool {
+		return slices.ContainsFunc(f.Progress, func(p *pairv1.TargetProgress) bool { return p.Target == target })
+	})
 }
 
 func updateText(req *pairv1.UpdateRequest, res *pairv1.UpdateResponse) string {
@@ -452,6 +463,8 @@ func confirmText(res *pairv1.ConfirmResponse) string {
 	var t text
 	t.line("已确认 %s: %s (写入 confirmed_hash, 清空假设与撤回假设)", res.DocId, strings.Join(res.Sections, ", "))
 	t.line("新 base: %s", res.Base)
+	t.line("下一步: 继续修改该文档时使用 `--base %s`; 此后再改动这些区块会显示为「%s」", res.Base,
+		sectionStatusNames[pairv1.SectionStatus_SECTION_STATUS_CHANGED])
 	return t.String()
 }
 
@@ -462,15 +475,14 @@ var feedbackStates = []struct {
 	{pairv1.FeedbackState_FEEDBACK_STATE_STAGED, "暂存"},
 	{pairv1.FeedbackState_FEEDBACK_STATE_TRIGGERED, "已发送待读取"},
 	{pairv1.FeedbackState_FEEDBACK_STATE_DRAINED, "已读取待闭环"},
-	{pairv1.FeedbackState_FEEDBACK_STATE_RESOLVED, "已闭环"},
 }
 
 func feedbackListText(res *pairv1.ListFeedbackResponse) string {
 	if len(res.Items) == 0 {
-		return "暂存区与反馈队列为空\n"
+		return "暂存区与反馈队列为空\n下一步: 用 `pair stage decide` 或 `pair stage note` 暂存反馈\n"
 	}
 	var t text
-	var staged, drained bool
+	var staged, triggered, drained bool
 	for _, s := range feedbackStates {
 		var items []*pairv1.Feedback
 		for _, f := range res.Items {
@@ -482,17 +494,21 @@ func feedbackListText(res *pairv1.ListFeedbackResponse) string {
 			continue
 		}
 		staged = staged || s.state == pairv1.FeedbackState_FEEDBACK_STATE_STAGED
+		triggered = triggered || s.state == pairv1.FeedbackState_FEEDBACK_STATE_TRIGGERED
 		drained = drained || s.state == pairv1.FeedbackState_FEEDBACK_STATE_DRAINED
 		t.line("%s (%d):", s.name, len(items))
 		for _, f := range items {
 			t.feedback(f)
 			if len(f.Progress) > 0 {
-				t.line("  目标进度: %s", progressText(f.Progress))
+				t.line("  目标进度: %s", progressText(f.Targets, f.Progress))
 			}
 		}
 	}
 	if staged {
 		t.line("下一步: 执行 `pair trigger` 发送暂存反馈, 或用 `pair stage remove <id>` 撤销暂存")
+	}
+	if triggered {
+		t.line("下一步: Agent 执行 `pair drain` 读取已发送的反馈")
 	}
 	if drained {
 		t.line("下一步: 对已读取待闭环的反馈执行 `pair update <module#sec> --base <hash> --resolves <id>` 闭环")
@@ -551,7 +567,8 @@ func skipText(reason string) string {
 	return t.String()
 }
 
-func checkText(diags []*pairv1.Diagnostic, diff *check.DiffResult) string {
+// checkText 格式化检查结果, rerun 是原样重新执行本次检查的命令.
+func checkText(diags []*pairv1.Diagnostic, diff *check.DiffResult, rerun string) string {
 	var t text
 	var errs, warns int32
 	for _, d := range diags {
@@ -564,7 +581,7 @@ func checkText(diags []*pairv1.Diagnostic, diff *check.DiffResult) string {
 	}
 	if errs > 0 {
 		t.line("检查未通过: %s", counts(count{"错误", errs}, count{"警告", warns}))
-		t.line("下一步: 按各条「修复」处理后重新执行 `pair check`")
+		t.line("下一步: 按各条「修复操作」处理后重新执行 `%s`", rerun)
 		return t.String()
 	}
 	if warns > 0 {
@@ -580,7 +597,7 @@ func checkText(diags []*pairv1.Diagnostic, diff *check.DiffResult) string {
 		t.line("联动检查: 改动源码 %d 个, 命中 scope 的模块文档均已更新", len(diff.Changed))
 	}
 	if warns > 0 {
-		t.line("下一步: 按各条「修复」处理警告, `pair check --strict` 会把警告视为错误")
+		t.line("下一步: 按各条「修复操作」处理警告, `pair check --strict` 会把警告视为错误")
 	} else {
 		t.line("下一步: 无需处理")
 	}

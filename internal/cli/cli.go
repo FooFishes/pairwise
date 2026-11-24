@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -48,8 +49,35 @@ func run(ctx context.Context, newService daemon.NewService, args []string, stdin
 		return int(code)
 	}
 	// 执行阶段的业务错误都已被 wrapRun 转成 exitCode, 其余错误来自参数解析与校验.
-	fmt.Fprintf(stderr, "用法错误: %s\n用法: %s\n执行 `%s --help` 查看完整说明\n", err, cmd.UseLine(), cmd.CommandPath())
+	fmt.Fprintf(stderr, "用法错误: %s\n用法: %s\n执行 `%s --help` 查看完整说明\n", localize(err.Error()), cmd.UseLine(), cmd.CommandPath())
 	return 2
+}
+
+// cobraErrors 把 cobra 与 pflag 常见的英文用法错误改写为中文.
+var cobraErrors = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`^accepts (\d+) arg\(s\), received (\d+)`), "需要 $1 个参数, 实际传入 $2 个"},
+	{regexp.MustCompile(`^requires at least (\d+) arg\(s\), only received (\d+)`), "至少需要 $1 个参数, 实际传入 $2 个"},
+	{regexp.MustCompile(`^accepts at most (\d+) arg\(s\), received (\d+)`), "最多接受 $1 个参数, 实际传入 $2 个"},
+	{regexp.MustCompile(`^accepts between (\d+) and (\d+) arg\(s\), received (\d+)`), "需要 $1 到 $2 个参数, 实际传入 $3 个"},
+	{regexp.MustCompile(`^unknown command (".*?") for ".*?"`), "未知命令 $1"},
+	{regexp.MustCompile(`\n\nDid you mean this\?\n`), "\n是否想执行:\n"},
+	{regexp.MustCompile(`^required flag\(s\) (.*) not set`), "缺少必填参数 $1"},
+	{regexp.MustCompile(`^unknown flag: (\S+)`), "未知参数 $1"},
+	{regexp.MustCompile(`^unknown shorthand flag: '(.)' in (\S+)`), "未知参数 -$1 (位于 $2)"},
+	{regexp.MustCompile(`^flag needs an argument: (.*)`), "参数 $1 需要取值"},
+	{regexp.MustCompile(`^invalid argument (".*?") for (".*?") flag: .*`), "参数 $2 的取值 $1 不合法"},
+	{regexp.MustCompile(`^invalid argument (".*?") for ".*?"`), "参数 $1 不是可选值"},
+	{regexp.MustCompile(`^if any flags in the group \[(\S+) (\S+)\] are set none of the others can be.*`), "--$1 与 --$2 不能同时使用"},
+}
+
+func localize(msg string) string {
+	for _, c := range cobraErrors {
+		msg = c.re.ReplaceAllString(msg, c.repl)
+	}
+	return msg
 }
 
 // app 持有全局参数.
@@ -101,7 +129,7 @@ func usagef(format string, args ...any) error {
 	return usageError(fmt.Sprintf(format, args...))
 }
 
-// wrapRun 让执行阶段的错误输出原因后以退出码 1 结束, 从而与参数解析阶段的用法错误区分开.
+// wrapRun 让执行阶段的错误输出原因后以退出码 1 结束 (参数或输入不合法为 2).
 func wrapRun(c *cobra.Command) {
 	if run := c.RunE; run != nil {
 		c.RunE = func(cmd *cobra.Command, args []string) error {
@@ -110,6 +138,10 @@ func wrapRun(c *cobra.Command) {
 				return err
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), errMessage(err))
+			// 常驻进程校验出的参数或输入不合法与 CLI 侧的用法错误同属一类.
+			if connect.CodeOf(err) == connect.CodeInvalidArgument {
+				return exitCode(2)
+			}
 			return exitCode(1)
 		}
 	}
@@ -150,6 +182,36 @@ func (a *app) reply(cmd *cobra.Command, msg proto.Message, text string) error {
 		return writeJSON(cmd.OutOrStdout(), msg, true)
 	}
 	_, err := io.WriteString(cmd.OutOrStdout(), text)
+	return err
+}
+
+// writeObject 输出由若干字段组成的 JSON 对象, kv 依次为字段名与值, proto 消息按 protojson 编码.
+func writeObject(w io.Writer, kv ...any) error {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i := 0; i+1 < len(kv); i += 2 {
+		var v []byte
+		var err error
+		if m, ok := kv[i+1].(proto.Message); ok {
+			v, err = protojson.Marshal(m)
+		} else {
+			v, err = json.Marshal(kv[i+1])
+		}
+		if err != nil {
+			return err
+		}
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%q:%s", kv[i], v)
+	}
+	b.WriteByte('}')
+	var out bytes.Buffer
+	if err := json.Indent(&out, b.Bytes(), "", "  "); err != nil {
+		return err
+	}
+	out.WriteByte('\n')
+	_, err := out.WriteTo(w)
 	return err
 }
 
@@ -197,18 +259,29 @@ func rpc[Req any, Res proto.Message](a *app, cmd *cobra.Command,
 	return a.reply(cmd, res, text(res))
 }
 
-// readInput 读取 --file 指定的文件; 未指定时读取 stdin, stdin 是终端时按缺少输入的用法错误处理.
+// readInput 读取 --file 指定的文件; 未指定时读取 stdin. stdin 是终端、输入为空或只有空白时
+// 一律按缺少输入的用法错误处理, 避免遗漏 heredoc 或生成了空文件时清空文档内容.
 func readInput(cmd *cobra.Command, file string) (string, error) {
+	const missing = "缺少输入: 用 --file <doc.md> 指定文件, 或从 stdin 传入内容 (如 `<<'EOF'`)"
+	var b []byte
+	var err error
 	if file != "" {
-		b, err := os.ReadFile(file)
-		return string(b), err
-	}
-	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok {
-		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-			return "", usagef("缺少输入: 用 --file <doc.md> 指定文件, 或从 stdin 传入内容 (如 `<<'EOF'`)")
+		if b, err = os.ReadFile(file); err != nil {
+			return "", usagef("读取 --file 失败: %v\n修复操作: 检查 --file 的路径, 相对路径按当前目录解析", err)
+		}
+	} else {
+		in := cmd.InOrStdin()
+		if f, ok := in.(*os.File); ok {
+			if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+				return "", usagef(missing)
+			}
+		}
+		if b, err = io.ReadAll(in); err != nil {
+			return "", err
 		}
 	}
-	b, err := io.ReadAll(in)
-	return string(b), err
+	if len(bytes.TrimSpace(b)) == 0 {
+		return "", usagef("%s; 本次输入为空", missing)
+	}
+	return string(b), nil
 }

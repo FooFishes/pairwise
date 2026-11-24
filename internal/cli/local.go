@@ -52,6 +52,9 @@ func (a *app) initCmd() *cobra.Command {
 		Short: "初始化 .pair/, 注册合并驱动, 可选安装 Git 提交钩子, 并输出全仓迁移指引",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if a.json {
+				return usagef("init 只输出面向模型的文本与迁移指引, 不支持 --json")
+			}
 			ctx := cmd.Context()
 			dir, err := os.Getwd()
 			if err != nil {
@@ -200,19 +203,27 @@ func (a *app) checkCmd() *cobra.Command {
 				diags = append(diags, diagProto(d))
 			}
 			var res *check.DiffResult
+			rerun := "pair check"
+			if strict {
+				rerun += " --strict"
+			}
 			if diff {
+				rerun = strings.Join(append([]string{rerun, "--diff"}, args...), " ")
 				opts := check.DiffOptions{}
 				if len(args) > 0 {
 					opts.BaseRef = args[0]
 				}
-				if res, err = check.Diff(ctx, r, ix, opts); err != nil {
+				if res, err = check.Diff(ctx, r, ix, opts); err != nil && opts.BaseRef != "" {
+					return fmt.Errorf("无法比较 %s...HEAD: %w\n修复操作: 用 `git rev-parse --verify %[1]s` 确认该引用存在; CI 的浅克隆中先执行 `git fetch origin <分支>` 取回目标分支后重试", opts.BaseRef, err)
+				}
+				if err != nil {
 					return err
 				}
 				if !res.OK() {
 					diags = append(diags, missingDiags(res.Missing, opts.BaseRef)...)
 				}
 			}
-			if err := a.reply(cmd, &pairv1.CheckResponse{Diagnostics: diags}, checkText(diags, res)); err != nil {
+			if err := a.reply(cmd, &pairv1.CheckResponse{Diagnostics: diags}, checkText(diags, res, rerun)); err != nil {
 				return err
 			}
 			if slices.ContainsFunc(diags, func(d *pairv1.Diagnostic) bool { return d.Severity == pairv1.Severity_SEVERITY_ERROR }) {
@@ -226,12 +237,9 @@ func (a *app) checkCmd() *cobra.Command {
 	return cmd
 }
 
+// diagProto 转换诊断; doc 包与 proto 的 Severity 枚举取值一一对应.
 func diagProto(d check.Diagnostic) *pairv1.Diagnostic {
-	sev := pairv1.Severity_SEVERITY_ERROR
-	if d.Severity == doc.SeverityWarning {
-		sev = pairv1.Severity_SEVERITY_WARNING
-	}
-	return &pairv1.Diagnostic{Severity: sev, Path: d.Path, Line: int32(d.Line), Code: d.Code, Message: d.Message, Fix: d.Fix}
+	return &pairv1.Diagnostic{Severity: pairv1.Severity(d.Severity), Path: d.Path, Line: int32(d.Line), Code: d.Code, Message: d.Message, Fix: d.Fix}
 }
 
 // missingDiags 把漏更新的模块转成诊断. baseRef 为空表示暂存区模式.
@@ -289,7 +297,11 @@ func (a *app) mergeDriverCmd() *cobra.Command {
 			for _, c := range res.Conflicts {
 				where = append(where, c.Where)
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: %d 处冲突 (%s), 已写入冲突标记\n", len(where), strings.Join(where, ", "))
+			msg := "已写入冲突标记"
+			if slices.Contains(where, "order") {
+				msg += "; order 表示两侧以不同方式调整了区块顺序, 已按 ours 的顺序写入, 请手动调整"
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: %d 处冲突 (%s), %s\n", len(where), strings.Join(where, ", "), msg)
 			return exitCode(1)
 		},
 	}
@@ -396,8 +408,8 @@ func commitMsg(cmd *cobra.Command, msgfile string) error {
 		fmt.Fprint(cmd.ErrOrStderr(), t.String())
 		return exitCode(1)
 	}
-	// 常驻进程不可用时不阻塞提交, 未清除的原因留待下次提交时再处理.
-	if c, err := client.Dial(ctx, r.Root()); err == nil {
+	// 只在常驻进程已运行时清除 (提交期间不拉起后台进程); 不可用时不阻塞提交, 未清除的原因留待下次提交时再处理.
+	if c, ok := client.Running(ctx, r.Root()); ok {
 		_, _ = c.ConsumeSkips(ctx, &pairv1.ConsumeSkipsRequest{})
 	}
 	return nil

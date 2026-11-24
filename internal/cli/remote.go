@@ -35,14 +35,18 @@ func (a *app) serveCmd() *cobra.Command {
 				return err
 			}
 			if stop {
-				if _, ok := client.Running(ctx, dir); !ok {
-					_, err := io.WriteString(out, "常驻进程未在运行\n")
+				stopped, err := client.Stop(ctx, dir)
+				if err != nil {
 					return err
 				}
-				if err := client.Stop(ctx, dir); err != nil {
-					return err
+				if a.json {
+					return writeObject(out, "stopped", stopped)
 				}
-				_, err := io.WriteString(out, "已停止常驻进程\n")
+				msg := "常驻进程未在运行"
+				if stopped {
+					msg = "已停止常驻进程"
+				}
+				_, err = fmt.Fprintf(out, "%s\n下一步: 无需处理, 下次执行经常驻进程的 pair 命令时会自动拉起\n", msg)
 				return err
 			}
 			c, err := client.Dial(ctx, dir)
@@ -61,7 +65,12 @@ func (a *app) serveCmd() *cobra.Command {
 			t.line("常驻进程运行中: pid %d, 版本 %s, 工作树 %s (分支 %s)", ping.Pid, ping.Version, ping.Root, ping.Branch)
 			t.line("界面地址: %s", url)
 			t.line("下一步: 在浏览器中打开该地址; 地址带一次性令牌, 首次打开后作废, 需要新地址时重新执行 `pair serve`")
-			if _, err := io.WriteString(out, t.String()); err != nil || !open {
+			if a.json {
+				err = writeObject(out, "daemon", ping, "url", url)
+			} else {
+				_, err = io.WriteString(out, t.String())
+			}
+			if err != nil || !open {
 				return err
 			}
 			if err := browser.OpenURL(url); err != nil {
@@ -168,14 +177,24 @@ func (a *app) askCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.reply(cmd, res, askText(res, wait)); err != nil || !wait {
-				return err
+			if !wait {
+				return a.reply(cmd, res, askText(res, wait))
+			}
+			// --json 时等待结束后输出一个同时含提交与等待结果的对象, 保证 stdout 是单个 JSON.
+			if !a.json {
+				if _, err := io.WriteString(cmd.OutOrStdout(), askText(res, wait)); err != nil {
+					return err
+				}
 			}
 			w, err := c.WaitDecision(ctx, &pairv1.WaitDecisionRequest{Id: args[0], TimeoutSecs: timeout, SessionId: a.session})
 			if err != nil {
 				return err
 			}
-			return a.reply(cmd, w, waitText(w))
+			if a.json {
+				return writeObject(cmd.OutOrStdout(), "ask", res, "wait", w)
+			}
+			_, err = io.WriteString(cmd.OutOrStdout(), waitText(w))
+			return err
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "问题文档路径")
@@ -201,10 +220,12 @@ func (a *app) updateCmd() *cobra.Command {
 				return usagef("--kind 只能是 module 或 flow")
 			}
 			req := &pairv1.UpdateRequest{Target: args[0], Base: base, Resolves: resolves, NoChange: noChange, Kind: kind, SessionId: a.session}
-			switch {
-			case noChange != "" && file != "":
+			switch changed := cmd.Flags().Changed("no-change"); {
+			case changed && strings.TrimSpace(noChange) == "":
+				return usagef("--no-change 的原因不能为空, 如 `--no-change \"选店页规则保持不变\"`")
+			case changed && file != "":
 				return usagef("--no-change 不写入正文, 不能与 --file 同时使用")
-			case noChange == "":
+			case !changed:
 				var err error
 				if req.Content, err = readInput(cmd, file); err != nil {
 					return err
@@ -215,7 +236,7 @@ func (a *app) updateCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVarP(&file, "file", "f", "", "输入文件路径")
-	f.StringVar(&base, "base", "", "`pair show` 或 `pair bind` 输出的整文件 base 哈希")
+	f.StringVar(&base, "base", "", "pair show 或 pair bind 输出的整文件 base `hash`")
 	f.StringSliceVar(&resolves, "resolves", nil, "本次更新闭环的反馈 ID, 可重复或用逗号分隔")
 	f.StringVar(&noChange, "no-change", "", "目标无需改动时的原因, 不写入正文")
 	f.StringVar(&kind, "kind", "module", "新建文档的类型: module 或 flow")
@@ -285,7 +306,7 @@ func (a *app) stageCmd() *cobra.Command {
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return rpc(a, cmd, svc.StageRemove, &pairv1.StageRemoveRequest{Id: args[0]}, func(*pairv1.StageRemoveResponse) string {
-					return fmt.Sprintf("已从暂存区移除 %s\n", args[0])
+					return fmt.Sprintf("已从暂存区移除 %s\n下一步: 执行 `pair stage list` 查看剩余的暂存条目\n", args[0])
 				})
 			},
 		},
