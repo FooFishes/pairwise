@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/FooFishes/pairwise/gen/pair/v1/pairv1connect"
 	"github.com/FooFishes/pairwise/internal/daemon"
 	"github.com/FooFishes/pairwise/internal/gitx"
+	"github.com/FooFishes/pairwise/internal/repo"
 )
 
 // baseURL 只用于构造请求, 连接实际经 Unix Socket 建立.
@@ -54,8 +56,7 @@ var repoLocalEnv = []string{
 type Client struct {
 	pairv1connect.PairServiceClient
 	// Root 是工作树根目录.
-	Root   string
-	Socket string
+	Root string
 
 	stateDir string
 	http     *http.Client
@@ -71,21 +72,25 @@ func open(ctx context.Context, dir string) (*Client, error) {
 }
 
 func newClient(root, stateDir string) *Client {
-	sock := daemon.SocketPath(root)
+	c := &Client{Root: root, stateDir: stateDir}
 	// 不设整体超时: ask --wait 长轮询与 SSE 都是长连接.
-	hc := &http.Client{Transport: &http.Transport{
+	c.http = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, "unix", sock)
+			return d.DialContext(ctx, "unix", c.socket())
 		},
 	}}
-	return &Client{
-		PairServiceClient: pairv1connect.NewPairServiceClient(connect.NewClient(connecthttp.NewTransport(hc, baseURL))),
-		Root:              root,
-		Socket:            sock,
-		stateDir:          stateDir,
-		http:              hc,
+	c.PairServiceClient = pairv1connect.NewPairServiceClient(connect.NewClient(connecthttp.NewTransport(c.http, baseURL)))
+	return c
+}
+
+// socket 返回 daemon.json 记录的 socket 路径, 没有记录时按当前环境推算. 每次建立连接时重新读取,
+// 使运行目录环境变量与常驻进程不同的 CLI 也能连上, 且不会被崩溃后残留的旧记录固定在失效的路径上.
+func (c *Client) socket() string {
+	if info, err := daemon.ReadInfo(c.stateDir); err == nil && info.Socket != "" {
+		return info.Socket
 	}
+	return daemon.SocketPath(c.Root)
 }
 
 func (c *Client) ping(ctx context.Context) (*pairv1.PingResponse, error) {
@@ -95,29 +100,59 @@ func (c *Client) ping(ctx context.Context) (*pairv1.PingResponse, error) {
 }
 
 // Dial 连接 dir 所在工作树的常驻进程. 未运行时以 `pair daemon` 在后台拉起,
-// 构建指纹与当前可执行文件不一致时先停止旧进程再拉起.
+// 构建指纹与当前可执行文件不一致时请求旧进程退出、等它释放文件锁后再拉起.
+// 多个 CLI 并发执行时各自循环到连上同一个指纹一致的实例为止.
 func Dial(ctx context.Context, dir string) (*Client, error) {
 	c, err := open(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-	if res, err := c.ping(ctx); err == nil {
-		if res.Fingerprint == daemon.Fingerprint() {
-			return c, nil
+	var dialErr error
+	ok := waitUntil(ctx, func() bool {
+		res, err := c.ping(ctx)
+		switch {
+		case err == nil && res.Fingerprint == daemon.Fingerprint():
+			return true
+		case err == nil:
+			// 旧版本实例; 它可能已在响应其他 CLI 的请求而退出, 传输错误不必处理.
+			_, _ = c.Shutdown(ctx, &pairv1.ShutdownRequest{})
+		case !c.locked():
+			if dialErr = c.spawn(ctx); dialErr != nil {
+				return true
+			}
+			// 连上的也可能是其他 CLI 拉起的实例, 仍要核对指纹; spawn 可能已用掉大部分等待时间, 这里立即核对.
+			res, err := c.ping(ctx)
+			return err == nil && res.Fingerprint == daemon.Fingerprint()
 		}
-		if err := c.stop(ctx); err != nil {
-			return nil, err
-		}
-	}
-	if err := c.spawn(ctx); err != nil {
-		return nil, err
+		return false
+	})
+	switch {
+	case dialErr != nil:
+		return nil, dialErr
+	case !ok && c.locked():
+		return nil, c.unreachable()
+	case !ok:
+		return nil, fmt.Errorf("常驻进程未能在 %s 内就绪", waitTimeout)
 	}
 	return c, nil
 }
 
+// unreachable 返回常驻进程持有文件锁却无法连接时的错误.
+func (c *Client) unreachable() error {
+	pid := "<pid>"
+	if info, err := daemon.ReadInfo(c.stateDir); err == nil {
+		pid = strconv.Itoa(info.PID)
+	}
+	return fmt.Errorf("常驻进程持有 %s, 但无法经 %s 连接 (socket 文件可能已被清理).\n修复操作: 执行 `kill %s` 结束该进程后重试",
+		daemon.LockPath(c.stateDir), c.socket(), pid)
+}
+
 // spawn 以脱离终端的子进程拉起 `pair daemon` 并等待它可用. 多个 CLI 同时拉起时,
-// 后到的实例因文件锁退出, 轮询会连上先到的实例.
+// 后到的实例因文件锁退出, 轮询会连上先到的实例. 工作树未初始化时不拉起, 也不写运行态文件.
 func (c *Client) spawn(ctx context.Context) error {
+	if _, err := os.Stat(filepath.Join(c.Root, repo.Dir)); errors.Is(err, fs.ErrNotExist) {
+		return repo.ErrNotInitialized
+	}
 	exe, err := executable()
 	if err != nil {
 		return err
@@ -173,14 +208,14 @@ func (c *Client) spawn(ctx context.Context) error {
 	return nil
 }
 
-// locked 报告是否有常驻进程持有工作树的文件锁.
+// locked 报告是否有常驻进程持有工作树的文件锁. 运行态目录尚不存在等无法加锁的情况视为没有.
 func (c *Client) locked() bool {
 	lock := flock.New(daemon.LockPath(c.stateDir))
-	ok, _ := lock.TryLock()
+	ok, err := lock.TryLock()
 	if ok {
 		lock.Unlock()
 	}
-	return !ok
+	return !ok && err == nil
 }
 
 // executable 返回拉起常驻进程用的可执行文件路径. 优先沿用调用时的名字而非解析后的真实路径,
@@ -320,23 +355,22 @@ func (c *Client) UIURL(ctx context.Context) (string, error) {
 	return body.URL, nil
 }
 
-// Stop 停止 dir 所在工作树的常驻进程, 未运行时直接返回.
-func Stop(ctx context.Context, dir string) error {
-	c, ok := Running(ctx, dir)
-	if !ok {
-		return nil
+// Stop 停止 dir 所在工作树的常驻进程, 报告此前是否在运行. 持有文件锁却无法连接时返回带修复命令的错误.
+func Stop(ctx context.Context, dir string) (bool, error) {
+	c, err := open(ctx, dir)
+	if err != nil {
+		return false, err
 	}
-	return c.stop(ctx)
-}
-
-// stop 请求常驻进程退出并等待它释放文件锁. socket 在关闭 HTTP 服务时就已不可连接,
-// 但锁要到业务实现关闭后才释放, 此前拉起的新实例会因锁被占用而退出.
-func (c *Client) stop(ctx context.Context) error {
-	if _, err := c.Shutdown(ctx, &pairv1.ShutdownRequest{}); err != nil {
-		return err
+	if _, err := c.ping(ctx); err != nil {
+		if c.locked() {
+			return false, c.unreachable()
+		}
+		return false, nil
 	}
+	// socket 在关闭 HTTP 服务时就已不可连接, 但锁要到业务实现关闭后才释放, 此前拉起的新实例会因锁被占用而退出.
+	_, _ = c.Shutdown(ctx, &pairv1.ShutdownRequest{})
 	if !waitUntil(ctx, func() bool { return !c.locked() }) {
-		return fmt.Errorf("常驻进程未能在 %s 内退出", waitTimeout)
+		return true, fmt.Errorf("常驻进程未能在 %s 内退出", waitTimeout)
 	}
-	return nil
+	return true, nil
 }
