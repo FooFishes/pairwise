@@ -1,0 +1,63 @@
+# 界面端口的访问隔离: Host 只接受本机地址, 带 Origin 的请求必须同源, 一次性令牌换取
+# HttpOnly; SameSite=Strict 的会话 Cookie 后作废; 无令牌或无 Cookie 的请求被拒绝.
+
+exec git init -q -b main
+pair init
+pair serve
+grab PORT 'http://127\.0\.0\.1:([0-9]+)/' stdout
+grab TOKEN '\?token=([A-Z0-9]+)' stdout
+env UI=http://127.0.0.1:$PORT
+env PING=$UI/pair.v1.PairService/Ping
+
+# 无令牌、无 Cookie.
+! http -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 401$'
+! http GET $UI/
+stdout '^status 401$'
+
+# 非本机 Host (DNS 重绑定) 与跨站 Origin: 即使带着有效令牌也被拒绝, 令牌不被消耗.
+! http -H 'Host: evil.example:'$PORT GET $UI/?token=$TOKEN
+stdout '^status 403$'
+! stdout 'Set-Cookie'
+! http -H 'Origin: http://evil.example' GET $UI/?token=$TOKEN
+stdout '^status 403$'
+
+# 令牌换取会话 Cookie, 并重定向到去掉令牌的地址.
+http GET $UI/?token=$TOKEN
+stdout '^status 302$'
+stdout '^Location: /$'
+stdout '^Set-Cookie: pair_session_'$PORT'=[A-Z0-9]+; Path=/; HttpOnly; SameSite=Strict$'
+grab COOKIE 'Set-Cookie: ([^;]+);' stdout
+
+# 令牌已作废.
+! http GET $UI/?token=$TOKEN
+stdout '^status 401$'
+! stdout 'Set-Cookie'
+
+# 持 Cookie 的同源请求可调用接口; localhost 同样是本机地址.
+http -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 200$'
+stdout '"branch":\s*"main"'
+http -H 'Cookie: '$COOKIE -H 'Origin: '$UI -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 200$'
+http -H 'Host: localhost:'$PORT -H 'Origin: http://localhost:'$PORT -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 200$'
+
+# 持 Cookie 但 Host 或 Origin 不合法: 拒绝.
+! http -H 'Host: evil.example:'$PORT -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 403$'
+! http -H 'Host: 127.0.0.1:1' -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 403$'
+! http -H 'Origin: http://evil.example' -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 403$'
+! http -H 'Origin: https://127.0.0.1:'$PORT -H 'Cookie: '$COOKIE -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 403$'
+
+# 伪造的 Cookie 无效; 签发令牌的端点只在 Unix Socket 上开放.
+! http -H 'Cookie: pair_session_'$PORT'=FORGED' -H 'Content-Type: application/json' POST $PING '{}'
+stdout '^status 401$'
+! http -H 'Cookie: '$COOKIE POST $UI/token
+stdout '^status 404$'
+
+-- .gitignore --
+.tmp/

@@ -1,0 +1,56 @@
+# watch --jsonl 输出事件流; 默认只输出此后的新事件, --since <seq> 凭 Last-Event-ID 补发错过的事件.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+pair stage note 'discover#list' 第一条批注
+
+# 订阅当前时刻之后的事件.
+pair watch --jsonl &live&
+sleep 1s
+pair stage note 'discover#list' 第二条批注
+sleep 1s
+kill -INT live
+wait live
+stdout -count=1 '^\{"seq":"[0-9]+","type":"stage_changed","at":"[0-9]+","branch":"main","ids":\["fb-2"\]\}$'
+! stdout 'fb-1'
+grab SEQ '"seq":"([0-9]+)"' stdout
+
+# 订阅方离线期间发生的事件.
+pair trigger
+pair drain
+
+# 凭最后处理的序号重连: 补发错过的事件, 不重复已处理的事件.
+pair watch --jsonl --since $SEQ &replay&
+sleep 1s
+pair stage note 'discover#list' 第三条批注
+sleep 1s
+kill -INT replay
+wait replay
+! stdout '"ids":\["fb-2"\]\}'
+stdout '^\{"seq":"[0-9]+","type":"trigger","at":"[0-9]+","branch":"main","ids":\["fb-1","fb-2"\]\}$'
+stdout '^\{"seq":"[0-9]+","type":"drained","at":"[0-9]+","branch":"main","ids":\["fb-1","fb-2"\]\}$'
+stdout '"type":"stage_changed","at":"[0-9]+","branch":"main","ids":\["fb-3"\]'
+
+# 从头补发.
+pair watch --jsonl --since 0 &all&
+sleep 1s
+kill -INT all
+wait all
+stdout '"type":"doc_changed","at":"[0-9]+","branch":"main","ids":\["discover"\]'
+stdout '"ids":\["fb-1"\]'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 列表 <!-- #list -->
+
+列表正文.

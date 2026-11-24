@@ -1,0 +1,213 @@
+# update 忽略输入中的 confirmed_hash 与 retracted; 未关联 --resolves 删去的假设移入同区块 retracted;
+# 关联 --resolves 的批注精确移除其针对的假设, 同区块其余假设保留.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+pair stage confirm 'discover#stage'
+stdout '已确认 discover: stage'
+grep 'confirmed_hash: "[0-9a-f]{12}"' .pair/modules/discover.md
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+
+# 整文档输入伪造 confirmed_hash 与 retracted, 并删去假设 shared-sort.
+pair update discover --base $BASE --file in/forged.md
+stdout '已撤回假设 \(未关联 --resolves 删去, 已移入 retracted 待开发者知晓\):'
+stdout '^- shared-sort: 三个分类共用同一排序状态$'
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+cmp .pair/modules/discover.md want/after-forged.md
+
+# 区块输入以只含 assumptions 的 Frontmatter 开头: 整体设置该区块的假设, 新增 lazy-load.
+stdin in/tabs-assumptions.md
+pair update 'discover#tabs' --base $BASE
+! stdout '已撤回假设'
+grep 'id: lazy-load' .pair/modules/discover.md
+
+# 区块输入的 Frontmatter 只能含 assumptions.
+stdin in/tabs-bad.md
+! pair update 'discover#tabs' --base $BASE
+stderr '区块输入的 Frontmatter 只能包含 assumptions, 不能包含 confirmed_hash'
+
+# 针对假设 no-mealtime 的批注: 未发送前不能闭环, 发送后只能由覆盖目标区块的更新闭环.
+pair stage note 'discover#tabs' --assumption no-mealtime 饭点参数也要传
+stdout '\[id: fb-1\] 修改说明 discover#tabs 假设 no-mealtime'
+pair show 'discover#tabs'
+grab BASE 'base: ([0-9a-f]{12})' stdout
+stdin in/tabs-body.md
+! pair update 'discover#tabs' --base $BASE --resolves fb-1
+stderr '反馈「fb-1」开发者尚未确认, 不能闭环'
+pair trigger
+stdout '已发送 1 条反馈'
+pair drain
+stdout '^- \[id: fb-1\] 修改说明 discover#tabs 假设 no-mealtime$'
+stdout '^  假设内容: 非推荐排序不传饭点参数$'
+stdout '^  说明: 饭点参数也要传$'
+stdout '^- fb-1: 执行 `pair update discover#tabs --base <hash> --resolves fb-1`$'
+stdin in/tabs-body.md
+! pair update 'discover#list' --base $BASE --resolves fb-1
+stderr '批注「fb-1」针对区块「discover#tabs」, 本次更新「discover#list」没有覆盖它'
+stdin in/tabs-body.md
+pair update 'discover#tabs' --base $BASE --resolves fb-1
+stdout '已闭环: fb-1'
+stdout '已移除假设: no-mealtime'
+! stdout '已撤回假设'
+cmp .pair/modules/discover.md want/final.md
+
+# 已闭环的反馈不能再次关联.
+pair show discover
+grab BASE 'base: ([0-9a-f]{12})' stdout
+stdin in/tabs-body.md
+! pair update 'discover#tabs' --base $BASE --resolves fb-1
+stderr '反馈「fb-1」已闭环, 不能再次关联'
+pair stage list
+stdout '暂存区与反馈队列为空'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+      - id: no-mealtime
+        text: "非推荐排序不传饭点参数"
+      - id: keep-tab
+        text: "返回页面时保留所选分类"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/forged.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: no-mealtime
+        text: "非推荐排序不传饭点参数"
+      - id: keep-tab
+        text: "返回页面时保留所选分类"
+  stage:
+    confirmed_hash: "000000000000"
+  list:
+    confirmed_hash: "111111111111"
+    retracted:
+      - id: forged
+        text: "伪造的撤回"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/tabs-assumptions.md --
+---
+assumptions:
+  - id: no-mealtime
+    text: "非推荐排序不传饭点参数"
+  - id: keep-tab
+    text: "返回页面时保留所选分类"
+  - id: lazy-load
+    text: "列表滚动到底再加载下一页"
+---
+
+分类正文.
+-- in/tabs-bad.md --
+---
+confirmed_hash: "000000000000"
+---
+
+分类正文.
+-- in/tabs-body.md --
+
+分类正文, 饭点参数始终传递.
+-- want/after-forged.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: no-mealtime
+        text: "非推荐排序不传饭点参数"
+      - id: keep-tab
+        text: "返回页面时保留所选分类"
+    retracted:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- want/final.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: keep-tab
+        text: "返回页面时保留所选分类"
+      - id: lazy-load
+        text: "列表滚动到底再加载下一页"
+    retracted:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文, 饭点参数始终传递.
+
+## 列表 <!-- #list -->
+
+列表正文.

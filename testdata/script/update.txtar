@@ -1,0 +1,324 @@
+# update 新建文档、按区块更新与整文档更新; 未改动的区块与 Frontmatter 字节保持不变,
+# 代码块与 HTML 注释中的 ## 不是区块边界.
+
+exec git init -q -b main
+pair init
+
+# 新建: 免传 --base, 输入中没有受控字段时原样写入.
+pair update discover --file in/discover.md
+stdout '已新建 discover \(.pair/modules/discover.md\)'
+stdout '新 base: [0-9a-f]{12}'
+stdout '下一步: 继续修改该文档时使用 `--base [0-9a-f]{12}`'
+cmp .pair/modules/discover.md in/discover.md
+pair update flow-a --kind flow --file in/flow.md
+stdout '已新建 flow-a \(.pair/flows/flow-a.md\)'
+exec git add -A
+exec git commit -q -m init
+
+# 只有三个受管区块: 代码块与注释中的 ## 不切分区块.
+pair list modules
+stdout 'discover 发现页 \(.pair/modules/discover.md\): 区块 3'
+! pair show 'discover#fake'
+stderr '「discover」中没有区块「fake」'
+pair show 'discover#tabs'
+stdout '^## 分类栏 <!-- #tabs -->$'
+stdout '^## 代码块里的标题 <!-- #fake -->$'
+! stdout '^## 列表'
+grab BASE 'base: ([0-9a-f]{12})' stdout
+# 单区块查看返回的也是整文件 base.
+pair show discover
+stdout 'base: '$BASE' \(.pair/modules/discover.md 的整文件哈希\)'
+stdout '下一步: 修改单个区块执行 `pair update discover#<sec> --base '$BASE
+
+# 区块更新 (stdin, 不含标题行且从正文首行写起): 保留原标题与其后的空行, 只替换正文, 其余字节不变.
+stdin in/list-body.md
+pair update 'discover#list' --base $BASE
+stdout '已更新 discover#list'
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+cmp .pair/modules/discover.md want/step1.md
+exec git diff --numstat
+stdout '^1\s+1\s+.pair/modules/discover.md$'
+
+# 区块更新 (含标题行): 整体替换区块, 可以改标题文字.
+stdin in/list-heading.md
+pair update 'discover#list' --base $BASE
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+cmp .pair/modules/discover.md want/step2.md
+
+# 相同内容再次提交: 不写文件.
+stdin in/list-heading.md
+pair update 'discover#list' --base $BASE
+stdout 'discover#list 内容无变化'
+stdout '新 base: '$BASE
+
+# 区块更新追加新区块.
+stdin in/new-section.md
+pair update 'discover#extra' --base $BASE
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+cmp .pair/modules/discover.md want/step3.md
+
+# 整文档更新: 改 scope 中一项与 stage 正文, 其余 Frontmatter 行与区块字节不变.
+pair update discover --base $BASE --file in/whole.md
+stdout '已更新 discover'
+cmp .pair/modules/discover.md want/step4.md
+pair check
+stdout '检查通过'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 列表 <!-- #list -->
+
+列表正文.
+   缩进保留的一行.
+-- in/flow.md --
+---
+id: flow-a
+---
+
+# 推荐流程
+
+## 步骤 <!-- #steps -->
+
+进入发现页后按 @discover#list 展示.
+-- in/list-body.md --
+列表正文已更新.
+   缩进保留的一行.
+-- in/list-heading.md --
+## 推荐列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+-- in/new-section.md --
+## 附加 <!-- #extra -->
+
+附加正文.
+-- in/whole.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/v2/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文 v2.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 推荐列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+
+## 附加 <!-- #extra -->
+
+附加正文.
+-- want/step1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+-- want/step2.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 推荐列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+-- want/step3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 推荐列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+
+## 附加 <!-- #extra -->
+
+附加正文.
+-- want/step4.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/v2/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+导语段落.
+
+## 舞台 <!-- #stage -->
+
+舞台正文 v2.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+```md
+## 代码块里的标题 <!-- #fake -->
+```
+
+<!--
+## 注释里的标题 <!-- #fake2 -->
+-->
+
+## 推荐列表 <!-- #list -->
+
+列表正文已更新.
+   缩进保留的一行.
+
+## 附加 <!-- #extra -->
+
+附加正文.

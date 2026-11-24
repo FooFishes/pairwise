@@ -1,0 +1,56 @@
+# pair init 创建 .pair/ 目录与配置、注册合并驱动并按需安装 Git 钩子; 重复执行幂等.
+
+exec git init -q -b main
+
+# 未初始化的工作树: 依赖 .pair/ 的命令给出修复指引.
+! pair check
+stderr '尚未初始化 Pairwise, 请先执行 `pair init`'
+
+pair init
+stdout '已创建 .pair/config.toml'
+stdout '已注册 Git 合并驱动 merge.pair'
+stdout '未安装 Git 钩子; 需要提交前联动检查时执行 `pair init --git-hooks`'
+stdout '全仓迁移任务'
+exists .pair/modules .pair/flows .pair/decisions
+cmp .pair/.gitattributes want/gitattributes
+cmp .pair/config.toml want/config.toml
+! exists .git/hooks/commit-msg
+exec git config merge.pair.driver
+stdout '^pair merge-driver %O %A %B$'
+
+# 已有的非 Pairwise 钩子不被覆盖, 只给出接入指引.
+cp want/foreign-hook .git/hooks/prepare-commit-msg
+
+# 重复执行: 保留配置与已有内容, .gitattributes 不重复追加.
+cp want/custom-config.toml .pair/config.toml
+pair init --git-hooks
+stdout '保留已有的 .pair/config.toml'
+stdout '未覆盖已存在的非 Pairwise 钩子 .*prepare-commit-msg, 请在其中加入一行 `pair git-hook prepare-commit-msg "\$@" \|\| exit \$\?`'
+stdout '已安装 Git 钩子 commit-msg '
+cmp .pair/config.toml want/custom-config.toml
+cmp .pair/.gitattributes want/gitattributes
+cmp .git/hooks/prepare-commit-msg want/foreign-hook
+grep 'exec pair git-hook commit-msg "\$@"' .git/hooks/commit-msg
+
+# 再次执行: Pairwise 自己的钩子按当前内容重写, 仍不触碰外部钩子.
+rm .git/hooks/prepare-commit-msg
+pair init --git-hooks
+stdout '已安装 Git 钩子 prepare-commit-msg, commit-msg '
+grep 'exec pair git-hook prepare-commit-msg "\$@"' .git/hooks/prepare-commit-msg
+cmp .pair/.gitattributes want/gitattributes
+pair check
+stdout '检查通过'
+
+-- want/gitattributes --
+*.md merge=pair
+-- want/config.toml --
+# check --diff 忽略的源码路径, 相对工作树根目录, 使用 doublestar Glob 语法, 如 "vendor/**"
+ignore_globs = []
+# ask --wait 的默认超时秒数, 应低于宿主单次命令的超时上限
+ask_wait_timeout_secs = 90
+-- want/custom-config.toml --
+ignore_globs = ["vendor/**"]
+ask_wait_timeout_secs = 30
+-- want/foreign-hook --
+#!/bin/sh
+echo foreign

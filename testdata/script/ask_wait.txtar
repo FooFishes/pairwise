@@ -1,0 +1,138 @@
+# ask 校验并提交待确认问题; ask --wait 超时以退出码 0 返回按默认方案继续的提示 (默认秒数取自 config.toml),
+# 开发者在另一进程选择并 Trigger 后, 阻塞中的 --wait 立即返回所选方案并视为已读取.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+pair update pick-shop --file in/pick-shop.md
+
+# 校验不通过时不写入, 并逐条给出修复操作.
+! pair ask shop-policy --file in/bad.md
+stderr '问题「shop-policy」未通过校验, 未写入:'
+stderr 'targets 中的 `discover#nope` 无法解析: 「discover」中没有区块或顶层容器「nope」'
+stderr 'default_option「opt-z」不是 pw:compare 中的方案'
+stderr '修复操作: 把 default_option 改为已有方案的 ID, 可选值: opt-a, opt-b'
+! exists .pair/decisions/shop-policy.md
+
+pair ask shop-policy --file in/decision.md
+stdout '^已提交待确认问题 shop-policy \(.pair/decisions/shop-policy.md\)$'
+stdout '^受影响目标: discover#list, pick-shop#list$'
+stdout '^候选方案: opt-a \(发现页剔除\), opt-b \(全部保留\); 默认方案 opt-a$'
+stdout '^下一步: 请先按默认方案 opt-a 继续执行, 问题已保留在队列中'
+cmp .pair/decisions/shop-policy.md in/decision.md
+
+# 超时: 退出码 0, 提示按 default_option 继续, 问题保留.
+pair ask shop-policy --file in/decision.md --wait --timeout 1
+stdout '^已覆盖待确认问题 shop-policy'
+stdout '^正在等待开发者确认\.\.\.$'
+stdout '^暂未确认, 请先按 default_option opt-a 继续执行, 问题已保留在队列中 \(已等待 1 秒\)$'
+exists .pair/decisions/shop-policy.md
+
+# 不带 --timeout 时取 config.toml 的 ask_wait_timeout_secs.
+cp in/config.toml .pair/config.toml
+pair ask shop-policy --file in/decision.md --wait
+stdout '\(已等待 1 秒\)$'
+
+! pair ask shop-policy --file in/decision.md --timeout 5
+stderr '用法错误: --timeout 只能与 --wait 一起使用'
+
+# 等待期间开发者在另一进程选择方案并发送: --wait 立即返回所选方案.
+pair ask shop-policy --file in/decision.md --wait --timeout 60 &w&
+sleep 500ms
+! pair stage decide shop-policy --pick opt-z
+stderr '「opt-z」不是问题「shop-policy」的方案, 可选方案: opt-a, opt-b'
+pair stage decide shop-policy --pick opt-b --note 选店页也保留
+stdout '\[id: shop-policy\] 选择方案 opt-b \(全部保留\)'
+pair trigger
+stdout '^- \[id: shop-policy\] 选择方案 opt-b \(全部保留\)$'
+wait w
+stdout '^已读取 1 条开发者确认反馈:$'
+stdout '^- \[id: shop-policy\] 选择方案 opt-b \(全部保留\)$'
+stdout '^  说明: 选店页也保留$'
+stdout '^  受影响目标: discover#list, pick-shop#list$'
+stdout '--resolves shop-policy --no-change'
+! stdout '暂未确认'
+
+# --wait 返回即视为已读取, drain 不再重复输出.
+pair drain
+stdout '暂无已发送的开发者反馈'
+pair status
+stdout '反馈: 已读取待闭环 1'
+stdout '待确认问题: shop-policy'
+
+-- .gitignore --
+.tmp/
+-- in/config.toml --
+ignore_globs = []
+ask_wait_timeout_secs = 1
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 列表 <!-- #list -->
+
+发现页列表.
+-- in/pick-shop.md --
+---
+id: pick-shop
+scope:
+  - "src/pick/**"
+---
+
+# 选店页
+
+## 列表 <!-- #list -->
+
+选店页列表.
+-- in/decision.md --
+---
+id: shop-policy
+targets:
+  - "discover#list"
+  - "pick-shop#list"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+
+#### 发现页剔除 <!-- #opt-a -->
+
+发现页剔除歇业门店, 选店页保留.
+
+#### 全部保留 <!-- #opt-b -->
+
+两处都保留并标注歇业.
+
+<!-- /pw:compare -->
+-- in/bad.md --
+---
+id: shop-policy
+targets:
+  - "discover#nope"
+default_option: opt-z
+---
+
+# 歇业门店处理
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+
+#### 发现页剔除 <!-- #opt-a -->
+
+剔除.
+
+#### 全部保留 <!-- #opt-b -->
+
+保留.
+
+<!-- /pw:compare -->

@@ -1,0 +1,60 @@
+# 暂存区与反馈队列按分支名隔离: 切换分支后原分支的条目挂起保留, 切回后恢复.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+exec git add -A
+exec git commit -q -m init
+
+pair stage note 'discover#list' main 分支的批注
+stdout '\[id: fb-1\] 修改说明 discover#list'
+pair status
+stdout '^工作树 .*, 分支 main$'
+stdout '^反馈: 暂存 1$'
+
+# 切到 feature: 每条命令按执行时的 HEAD 读写暂存区, 不必等文件监听.
+exec git checkout -q -b feature
+pair stage list
+stdout '^暂存区与反馈队列为空$'
+stdout '^下一步: 用 `pair stage decide` 或 `pair stage note` 暂存反馈$'
+pair trigger
+stdout '^暂存区为空, 没有可发送的反馈$'
+pair stage note 'discover#list' feature 分支的批注
+stdout '\[id: fb-2\] 修改说明 discover#list'
+pair status
+stdout '^工作树 .*, 分支 feature$'
+stdout '^反馈: 暂存 1$'
+
+# 切回 main: 只看到 main 的条目, 发送不影响 feature.
+exec git checkout -q main
+pair stage list
+stdout '^暂存 \(1\):$'
+stdout '\[id: fb-1\] '
+! stdout 'fb-2'
+stdout '^  说明: main 分支的批注$'
+pair trigger
+stdout '^- \[id: fb-1\] 修改说明 discover#list$'
+! stdout 'fb-2'
+
+exec git checkout -q feature
+poll '分支 feature' pair status
+pair stage list
+stdout '^暂存 \(1\):$'
+stdout '\[id: fb-2\] '
+pair drain
+stdout '^暂无已发送的开发者反馈$'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 列表 <!-- #list -->
+
+列表正文.

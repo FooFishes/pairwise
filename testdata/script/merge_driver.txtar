@@ -1,0 +1,181 @@
+# 合并驱动: 两个分支分别修改同一模块 Frontmatter 的相邻行与不同区块时 git merge 自动成功;
+# 同一区块两侧都改时写入冲突标记并以非零退出.
+
+exec git init -q -b main
+pair init
+cp in/base.md .pair/modules/discover.md
+exec git add -A
+exec git commit -q -m base
+exec git check-attr merge -- .pair/modules/discover.md
+stdout 'merge: pair$'
+
+# feature: scope 末尾追加一项, 修改 list 区块.
+exec git checkout -q -b feature
+cp in/feature.md .pair/modules/discover.md
+exec git commit -q -am feature
+
+# main: 修改 tabs 区块, 并在 scope 紧后插入 sections (与 feature 的改动相邻).
+exec git checkout -q main
+cp in/main.md .pair/modules/discover.md
+pair stage confirm 'discover#stage'
+exec git commit -q -am main
+
+exec git merge --no-edit feature
+cmp .pair/modules/discover.md want/merged.md
+exec git status --porcelain
+! stdout .
+pair check
+stdout '检查通过'
+
+# 同一区块两侧都改: 冲突.
+exec git checkout -q -b conflict
+exec git checkout -q -b side
+cp in/side.md .pair/modules/discover.md
+exec git commit -q -am side
+exec git checkout -q conflict
+cp in/other.md .pair/modules/discover.md
+exec git commit -q -am other
+! exec git merge --no-edit side
+stdout 'CONFLICT \(content\): Merge conflict in .pair/modules/discover.md'
+stderr 'pair merge-driver: 1 处冲突 \(section:stage\), 已写入冲突标记'
+grep '^<<<<<<< ' .pair/modules/discover.md
+grep '^>>>>>>> ' .pair/modules/discover.md
+grep '^舞台正文 side\.$' .pair/modules/discover.md
+grep '^舞台正文 other\.$' .pair/modules/discover.md
+exec git merge --abort
+
+-- .gitignore --
+.tmp/
+-- in/base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/feature.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 feature.
+-- in/main.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 main.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- want/merged.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 main.
+
+## 列表 <!-- #list -->
+
+列表正文 feature.
+-- in/side.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 side.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 main.
+
+## 列表 <!-- #list -->
+
+列表正文 feature.
+-- in/other.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 other.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 main.
+
+## 列表 <!-- #list -->
+
+列表正文 feature.

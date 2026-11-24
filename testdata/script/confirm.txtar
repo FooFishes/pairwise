@@ -1,0 +1,135 @@
+# stage confirm 写入 confirmed_hash 并清空假设与撤回假设, 正文字节不变; 已确认区块再被修改时保留
+# confirmed_hash, 状态为「已确认区块含未审阅改动」. 外部直接编辑同样如此, 且文件监听从不回写文件.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+# 删去 no-mealtime, 使 tabs 同时带有假设与撤回假设.
+pair update discover --base $BASE --file in/discover-retract.md
+pair show 'discover#tabs'
+stdout '^区块状态: 未确认$'
+stdout '^- 假设 shared-sort: '
+stdout '^- 撤回假设 no-mealtime: '
+
+pair stage confirm 'discover#tabs'
+stdout '^已确认 discover: tabs \(写入 confirmed_hash, 清空假设与撤回假设\)$'
+stdout '^下一步: 继续修改该文档时使用 `--base [0-9a-f]{12}`; 此后再改动这些区块会显示为「已确认区块含未审阅改动」$'
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+cmp .pair/modules/discover.md want/confirmed.md
+pair show 'discover#tabs'
+stdout '^区块状态: 已确认$'
+! stdout '^- (撤回)?假设'
+
+# 小幅修改已确认区块: 保留 confirmed_hash, 状态变为含未审阅改动.
+stdin in/tabs-typo.md
+pair update 'discover#tabs' --base $BASE
+grep 'confirmed_hash: "e593f3421de7"' .pair/modules/discover.md
+pair show 'discover#tabs'
+stdout '^区块状态: 已确认区块含未审阅改动$'
+pair list modules
+stdout 'discover 发现页 \(.pair/modules/discover.md\): 区块 2, 未确认 1, 含未审阅改动 1'
+
+# 省略 #sec 时确认全部区块.
+pair stage confirm discover
+stdout '^已确认 discover: stage, tabs '
+pair list modules
+stdout 'discover 发现页 \(.pair/modules/discover.md\): 区块 2$'
+
+# 外部直接编辑 (不经 pair update): 按含未审阅改动展示, 异常的 Frontmatter 只提示不回写.
+cp in/external.md .pair/modules/discover.md
+poll '区块状态: 已确认区块含未审阅改动' pair show 'discover#stage'
+pair check
+stdout '警告 \[stale-meta\] Frontmatter sections 中的「ghost」没有对应的区块'
+sleep 300ms
+cmp .pair/modules/discover.md in/external.md
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+      - id: no-mealtime
+        text: "非推荐排序不传饭点参数"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+-- in/discover-retract.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    assumptions:
+      - id: shared-sort
+        text: "三个分类共用同一排序状态"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+-- in/tabs-typo.md --
+
+分类正文 (修正错别字).
+-- want/confirmed.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  tabs:
+    confirmed_hash: "e593f3421de7"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+-- in/external.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  stage:
+    confirmed_hash: "000000000000"
+  ghost:
+    confirmed_hash: "111111111111"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文, 开发者在编辑器里改的.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 (修正错别字).

@@ -1,0 +1,98 @@
+# commit-msg 钩子 (check --diff 暂存区模式): 源码命中 scope 而模块文档未改时拒绝提交并给出修复命令,
+# 带 Pair-Skip trailer 或同时改了文档时放行; ignore_globs 中的路径不受约束. 区间模式供 CI 使用.
+# prepare-commit-msg 自动追加 trailer 依赖会话阶段的 skip-update, 此处不覆盖.
+
+exec git init -q -b main
+pair init --git-hooks
+cp in/config.toml .pair/config.toml
+pair update discover --file in/discover.md
+exec git add -A
+exec git commit -q -m init
+
+# 只改源码: 拒绝.
+cp in/code.txt src/discover/page.go
+exec git add src/discover/page.go
+! pair check --diff
+stdout '^\.pair/modules/discover.md: 错误 \[doc-not-updated\] 模块「discover」scope 下的源码有改动, 但模块文档未更新: src/discover/page.go$'
+! exec git commit -q -m 'change page'
+stderr '^提交被拒绝: 以下模块 scope 下的源码有改动, 但模块文档未同步更新\.$'
+stderr '^\.pair/modules/discover.md: 错误 \[doc-not-updated\] 模块「discover」scope 下的源码有改动, 但模块文档未更新: src/discover/page.go$'
+stderr '^  修复操作: 执行 `pair show discover` 核对规则, 有变更时用 `pair update discover#<sec> --base <hash>` 同步并提交 .pair/modules/discover.md; 确认不涉及规格变更时执行 `pair skip-update --reason "<原因>"` 由 prepare-commit-msg 钩子追加 trailer, 或在提交信息末尾手写 `Pair-Skip: <原因>`$'
+exec git log --oneline
+stdout -count=1 '^[0-9a-f]+ '
+
+# 提交信息带 Pair-Skip trailer: 放行.
+exec git commit -q -m 'change page' -m 'Pair-Skip: 只重命名局部变量'
+exec git log -1 --format=%B
+stdout '^Pair-Skip: 只重命名局部变量$'
+
+# 同时改了模块文档: 放行.
+cp in/code2.txt src/discover/page.go
+pair show discover
+grab BASE 'base: ([0-9a-f]{12})' stdout
+stdin in/rules.md
+pair update 'discover#rules' --base $BASE
+exec git add -A
+pair check --diff
+stdout '^联动检查: 改动源码 1 个, 命中 scope 的模块文档均已更新$'
+exec git commit -q -m 'change page and doc'
+
+# ignore_globs 中的生成代码与不属于任何模块的源码: 放行.
+mkdir src/discover/gen
+cp in/code.txt src/discover/gen/api.go
+cp in/code.txt tools/build.go
+exec git add -A
+exec git commit -q -m 'regen'
+exec git log --oneline
+stdout -count=4 '^[0-9a-f]+ '
+
+# 区间模式 (CI): 检查 <base-ref>...HEAD, 并读取区间内全部提交信息中的 trailer.
+exec git checkout -q -b feature
+cp in/code2.txt src/discover/other.go
+exec git add -A
+exec git commit -q --no-verify -m 'feature code'
+! pair check --diff main
+stdout '\[doc-not-updated\] 模块「discover」scope 下的源码有改动, 但模块文档未更新: src/discover/other.go'
+stdout '确认不涉及规格变更时在区间内任一提交信息末尾加上 `Pair-Skip: <原因>` trailer'
+exec git commit -q --no-verify --allow-empty -m 'note' -m 'Pair-Skip: 只调样式'
+pair check --diff main
+stdout '^联动检查: 已按 Pair-Skip 放行 \(只调样式\)$'
+
+# commit-msg 在进程内执行, 常驻进程未运行时不会拉起它.
+pair serve --stop
+exec git reset -q
+pair git-hook commit-msg in/msg.txt
+pair serve --stop
+stdout '^常驻进程未在运行$'
+
+-- .gitignore --
+.tmp/
+-- in/config.toml --
+ignore_globs = ["src/discover/gen/**"]
+ask_wait_timeout_secs = 90
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 规则 <!-- #rules -->
+
+规则正文.
+-- in/rules.md --
+
+规则正文, 新增排序规则.
+-- in/code.txt --
+package discover
+-- in/code2.txt --
+package discover
+
+func Sort() {}
+-- src/discover/page.go --
+package discover // v0
+-- tools/.keep --
+-- in/msg.txt --
+提交信息

@@ -1,0 +1,157 @@
+# check 校验语法与引用, 输出带修复指引的诊断; --strict 把警告视为错误并在存在待确认问题时报错.
+# check 在进程内执行, 不拉起常驻进程.
+
+exec git init -q -b main
+pair init
+
+# 合法文档: 通过, 带 stale-meta 警告与待确认问题时非 strict 仍通过.
+cp in/discover.md .pair/modules/discover.md
+cp in/flow.md .pair/flows/browse.md
+pair check
+stdout '^检查通过$'
+cp in/decision.md .pair/decisions/shop-policy.md
+cp in/stale.md .pair/modules/stale.md
+pair check
+stdout '^.pair/modules/stale.md:6: 警告 \[stale-meta\] Frontmatter sections 中的「gone」没有对应的区块$'
+stdout '^检查通过, 警告 1$'
+stdout '`pair check --strict` 会把警告视为错误'
+
+! pair check --strict
+stdout '^.pair/decisions/shop-policy.md:1: 错误 \[pending-decision\] 问题「shop-policy」尚未闭环, 合并前须处理全部待确认问题$'
+stdout '^.pair/modules/stale.md:6: 错误 \[stale-meta\] '
+stdout '^检查未通过: 错误 2$'
+rm .pair/decisions/shop-policy.md .pair/modules/stale.md
+pair check --strict
+stdout '^检查通过$'
+
+# 各类错误: 缺锚点、文件级 ID 重复、容器未闭合、容器内子项重复、引用无法解析、id 与文件名不一致.
+cp in/broken.md .pair/modules/broken.md
+cp in/badref.md .pair/flows/badref.md
+! pair check
+stdout '\.pair/flows/badref.md:.* 错误 \[id-mismatch\] Frontmatter id「other」与文件名「badref.md」不一致'
+stdout '\.pair/flows/badref.md:.* 错误 \[unresolved-ref\] 引用 `@discover#nope` 无法解析: 「discover」中没有区块或顶层容器「nope」'
+stdout '^\.pair/modules/broken.md:7: 错误 \[missing-anchor\] 二级标题「没有锚点的标题」缺少锚点$'
+stdout '^  修复操作: 在标题行末尾补上锚点, 如 `## 没有锚点的标题 <!-- #<id> -->`'
+stdout '^\.pair/modules/broken.md:15: 错误 \[duplicate-id\] ID「dup」在文件内重复, 首次出现于第 11 行$'
+stdout '^\.pair/modules/broken.md:21: 错误 \[duplicate-item\] .*「opt-a」'
+stdout '^\.pair/modules/broken.md:[0-9]+: 错误 \[unclosed-container\] pw:scenarios 容器未闭合$'
+stdout '^  修复操作: 在所属区块结束前补上 `<!-- /pw:scenarios -->`$'
+stdout '^  修复操作: '
+stdout '^检查未通过: 错误 [0-9]+'
+stdout '^下一步: 按各条「修复操作」处理后重新执行 `pair check`$'
+! exists .git/pair/daemon.json
+
+# --json 输出结构化诊断.
+! pair check --json
+stdout '"code": "id-mismatch"'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 列表 <!-- #list -->
+
+<!-- pw:compare id="layouts" -->
+
+#### 卡片 <!-- #card -->
+
+卡片布局.
+
+#### 列表 <!-- #row -->
+
+行布局.
+
+<!-- /pw:compare -->
+-- in/flow.md --
+---
+id: browse
+---
+
+# 浏览流程
+
+## 步骤 <!-- #steps -->
+
+先看 @discover#list, 再对比 @discover#layouts/card.
+-- in/decision.md --
+---
+id: shop-policy
+targets:
+  - "discover#list"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+
+#### 剔除 <!-- #opt-a -->
+
+剔除.
+
+#### 保留 <!-- #opt-b -->
+
+保留.
+
+<!-- /pw:compare -->
+-- in/stale.md --
+---
+id: stale
+scope:
+  - "src/stale/**"
+sections:
+  gone:
+    confirmed_hash: "111111111111"
+---
+
+## 现存 <!-- #here -->
+
+正文.
+-- in/broken.md --
+---
+id: broken
+scope:
+  - "src/broken/**"
+---
+
+## 没有锚点的标题
+
+正文.
+
+## 第一处 <!-- #dup -->
+
+正文.
+
+## 第二处 <!-- #dup -->
+
+<!-- pw:compare id="cmp" -->
+
+#### 方案 <!-- #opt-a -->
+
+#### 方案 <!-- #opt-a -->
+
+<!-- /pw:compare -->
+
+## 未闭合 <!-- #open -->
+
+<!-- pw:scenarios id="sc" -->
+
+#### 夜间 <!-- #night -->
+
+正文.
+-- in/badref.md --
+---
+id: other
+---
+
+## 步骤 <!-- #steps -->
+
+见 @discover#nope.

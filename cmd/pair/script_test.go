@@ -1,10 +1,16 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
 
@@ -45,5 +51,93 @@ func TestScript(t *testing.T) {
 			})
 			return nil
 		},
+		Cmds: map[string]func(ts *testscript.TestScript, neg bool, args []string){
+			"grab":  cmdGrab,
+			"http":  cmdHTTP,
+			"poll":  cmdPoll,
+			"sleep": cmdSleep,
+		},
 	})
+}
+
+// cmdGrab 实现 `grab NAME REGEXP FILE`: 把 FILE (可以是 stdout 或 stderr) 中 REGEXP 首个分组的
+// 首次匹配存入环境变量 NAME, 供后续命令以 $NAME 引用 (如 base 哈希、端口与令牌).
+func cmdGrab(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 3 {
+		ts.Fatalf("usage: grab NAME REGEXP FILE")
+	}
+	m := regexp.MustCompile(args[1]).FindStringSubmatch(ts.ReadFile(args[2]))
+	if len(m) < 2 {
+		ts.Fatalf("%s 中没有匹配 %q 的内容", args[2], args[1])
+	}
+	ts.Setenv(args[0], m[1])
+}
+
+// cmdHTTP 实现 `http [-H 'Name: value']... METHOD URL [BODY]`: 不跟随重定向地发出请求,
+// 向 stdout 输出 `status <code>`、Location 与 Set-Cookie 响应头以及响应体. `-H 'Host: x'` 改写 Host.
+func cmdHTTP(ts *testscript.TestScript, neg bool, args []string) {
+	var headers []string
+	for len(args) >= 2 && args[0] == "-H" {
+		headers, args = append(headers, args[1]), args[2:]
+	}
+	if len(args) != 2 && len(args) != 3 {
+		ts.Fatalf("usage: http [-H 'Name: value']... METHOD URL [BODY]")
+	}
+	var body io.Reader
+	if len(args) == 3 {
+		body = strings.NewReader(args[2])
+	}
+	req, err := http.NewRequest(args[0], args[1], body)
+	ts.Check(err)
+	for _, h := range headers {
+		k, v, _ := strings.Cut(h, ":")
+		if v = strings.TrimSpace(v); strings.EqualFold(k, "Host") {
+			req.Host = v
+		} else {
+			req.Header.Set(k, v)
+		}
+	}
+	c := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := c.Do(req)
+	ts.Check(err)
+	defer res.Body.Close()
+	b, err := io.ReadAll(res.Body)
+	ts.Check(err)
+	fmt.Fprintf(ts.Stdout(), "status %d\n", res.StatusCode)
+	for _, k := range []string{"Location", "Set-Cookie"} {
+		for _, v := range res.Header.Values(k) {
+			fmt.Fprintf(ts.Stdout(), "%s: %s\n", k, v)
+		}
+	}
+	fmt.Fprintf(ts.Stdout(), "\n%s", b)
+	if ok := res.StatusCode < 400; ok == neg {
+		ts.Fatalf("unexpected status %s", res.Status)
+	}
+}
+
+// cmdPoll 实现 `poll REGEXP PROGRAM [ARGS...]`: 每 50ms 执行一次程序, 直到其 stdout 匹配 REGEXP,
+// 10 秒内仍不匹配则失败. 用于等待常驻进程经文件监听感知分支切换或外部改动.
+func cmdPoll(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) < 2 {
+		ts.Fatalf("usage: poll REGEXP PROGRAM [ARGS...]")
+	}
+	re := regexp.MustCompile(args[0])
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if ts.Exec(args[1], args[2:]...) == nil && re.MatchString(ts.ReadFile("stdout")) {
+			return
+		}
+		if time.Now().After(deadline) {
+			ts.Fatalf("10 秒内 %s 的输出仍不匹配 %q", strings.Join(args[1:], " "), args[0])
+		}
+	}
+}
+
+// cmdSleep 实现 `sleep DURATION`, 用于等待后台命令或文件监听生效.
+func cmdSleep(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 1 {
+		ts.Fatalf("usage: sleep DURATION")
+	}
+	d, err := time.ParseDuration(args[0])
+	ts.Check(err)
+	time.Sleep(d)
 }

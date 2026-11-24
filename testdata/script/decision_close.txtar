@@ -1,0 +1,115 @@
+# 问题的全部 targets 经 update --resolves 或 --no-change 闭环后, 工具自动删除问题文件;
+# 未经开发者选择发送的问题不能闭环.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+pair update pick-shop --file in/pick-shop.md
+pair ask shop-policy --file in/decision.md
+pair show discover
+grab BASE 'base: ([0-9a-f]{12})' stdout
+
+# 开发者尚未选择并发送: 不能闭环.
+stdin in/list.md
+! pair update 'discover#list' --base $BASE --resolves shop-policy
+stderr '反馈「shop-policy」开发者尚未确认, 不能闭环'
+pair stage decide shop-policy --pick opt-a
+stdin in/list.md
+! pair update 'discover#list' --base $BASE --resolves shop-policy
+stderr '开发者尚未确认'
+pair trigger
+pair drain
+stdout '^已读取 1 条开发者确认反馈:$'
+stdout '^- \[id: shop-policy\] 选择方案 opt-a \(发现页剔除\)$'
+stdout '对每个受影响目标执行 `pair update <module#sec> --base <hash> --resolves shop-policy`'
+stdout '全部目标更新或显式结案后工具将自动删除 `.pair/decisions/shop-policy.md`'
+
+# 更新未覆盖任何目标: 拒绝.
+pair show pick-shop
+grab PBASE 'base: ([0-9a-f]{12})' stdout
+stdin in/list.md
+! pair update 'pick-shop#extra' --base $PBASE --resolves shop-policy
+stderr '本次更新「pick-shop#extra」没有覆盖问题「shop-policy」的任何目标, 其 targets 为 discover#list, pick-shop#list'
+
+# 第一个目标经更新闭环: 问题仍保留并列出剩余目标.
+stdin in/list.md
+pair update 'discover#list' --base $BASE --resolves shop-policy
+stdout '^已更新 discover#list'
+stdout '^剩余未闭环:$'
+stdout '^- \[id: shop-policy\] 剩余目标: pick-shop#list$'
+! stdout '已闭环'
+exists .pair/decisions/shop-policy.md
+pair show shop-policy
+stdout '目标进度: discover#list 已更新'
+
+# --no-change 只接受问题的目标, 且必须与 --resolves 一起使用.
+! pair update 'pick-shop#list' --no-change 规则不变
+stderr '--no-change 必须与 --resolves 一起使用'
+! pair update 'pick-shop#extra' --resolves shop-policy --no-change 规则不变
+stderr '^「pick-shop#extra」不是问题「shop-policy」的目标, 其 targets 为 discover#list, pick-shop#list\.$'
+
+# 第二个目标显式结案: 全部目标完成, 问题文件被删除.
+pair update 'pick-shop#list' --resolves shop-policy --no-change 选店页规则保持不变
+stdout '^已将 pick-shop#list 标记为已核对 · 无需改动: 选店页规则保持不变$'
+stdout '^已闭环: shop-policy$'
+stdout '^问题 shop-policy 的全部目标已完成, 已删除 .pair/decisions/shop-policy.md$'
+! exists .pair/decisions/shop-policy.md
+cmp .pair/modules/pick-shop.md in/pick-shop.md
+pair list decisions
+stdout '^待确认问题 \(0\):$'
+pair check --strict
+stdout '检查通过'
+
+-- in/list.md --
+
+发现页剔除歇业门店.
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 列表 <!-- #list -->
+
+发现页列表.
+-- in/pick-shop.md --
+---
+id: pick-shop
+scope:
+  - "src/pick/**"
+---
+
+# 选店页
+
+## 列表 <!-- #list -->
+
+选店页列表.
+-- in/decision.md --
+---
+id: shop-policy
+targets:
+  - "discover#list"
+  - "pick-shop#list"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+
+#### 发现页剔除 <!-- #opt-a -->
+
+发现页剔除歇业门店, 选店页保留.
+
+#### 全部保留 <!-- #opt-b -->
+
+两处都保留并标注歇业.
+
+<!-- /pw:compare -->

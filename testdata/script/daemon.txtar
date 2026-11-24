@@ -1,0 +1,40 @@
+# 同一工作树并发执行多个命令只拉起一个常驻进程; serve 输出进程信息与带一次性令牌的界面地址;
+# serve --stop 停止后任意命令自动重新拉起.
+
+exec git init -q -b main
+pair init
+! exists .git/pair/daemon.json
+
+# 冷启动时并发执行: 全部成功, 且连上同一个进程.
+pair serve &a&
+pair serve &b&
+pair serve &c&
+pair status &d&
+wait a
+stdout '^常驻进程运行中: pid [0-9]+, 版本 dev, 工作树 .* \(分支 main\)$'
+stdout '^界面地址: http://127\.0\.0\.1:[0-9]+/\?token=[A-Z0-9]+$'
+stdout '^下一步: 在浏览器中打开该地址'
+grab PID 'pid ([0-9]+),' stdout
+wait b
+stdout 'pid '$PID','
+wait c
+stdout 'pid '$PID','
+wait d
+stdout '^工作树 .*, 分支 main$'
+grep '"pid":'$PID',' .git/pair/daemon.json
+pair serve
+stdout 'pid '$PID','
+
+# 停止后再次停止: 提示未在运行; 任意命令自动重新拉起新进程.
+pair serve --stop
+stdout '^已停止常驻进程$'
+! exists .git/pair/daemon.json
+pair serve --stop
+stdout '^常驻进程未在运行$'
+pair status
+stdout '^文档: 无$'
+exists .git/pair/daemon.json
+! grep '"pid":'$PID',' .git/pair/daemon.json
+
+-- .gitignore --
+.tmp/

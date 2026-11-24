@@ -1,0 +1,65 @@
+# 会清空或吞掉内容的输入一律拒绝, 文件不变; 改写受控字段时其余 Frontmatter 行保持原字节.
+
+exec git init -q -b main
+pair init
+pair update m --file in/m.md
+grab BASE '新 base: ([0-9a-f]{12})' stdout
+exec git add -A
+exec git commit -q -m init
+
+# 正文中未闭合的代码块会吞掉其后的区块: 拒绝写入.
+stdin in/unclosed.md
+! pair update 'm#a' --base $BASE
+stderr '区块输入改变了文档的区块切分, 未写入: 期望区块为 a, b, c, 按本次输入拼接后为 a'
+stderr '修复操作: 闭合输入中的代码块与注释'
+cmp .pair/modules/m.md in/m.md
+
+# 空输入与空的 --no-change 原因按用法错误拒绝.
+stdin in/empty.md
+! pair update 'm#a' --base $BASE
+stderr '缺少输入'
+cmp .pair/modules/m.md in/m.md
+! pair update 'm#a' --resolves q --no-change ''
+stderr '--no-change 的原因不能为空'
+
+# 确认只重写 sections, 手写的对齐、引号与缩进保持不变.
+pair stage confirm 'm#b'
+exec git diff --numstat
+stdout '^2\s+0\s+.pair/modules/m.md$'
+exec git diff
+stdout '^\+  b:$'
+stdout '^\+    confirmed_hash: "[0-9a-f]{12}"$'
+
+-- .gitignore --
+.tmp/
+-- in/m.md --
+---
+id: m        # 模块
+scope: ['src/m/**', "lib/m/**"]
+owner:   someone
+sections:
+  a:
+    assumptions:
+      - id: x1
+        text: 'one'
+---
+# M
+
+## A <!-- #a -->
+
+a1
+
+## B <!-- #b -->
+
+b1
+
+## C <!-- #c -->
+
+c1
+-- in/unclosed.md --
+a2
+
+```go
+func f() {}
+-- in/empty.md --
+

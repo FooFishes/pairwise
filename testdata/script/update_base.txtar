@@ -1,0 +1,112 @@
+# 已存在文档漏传或传错 --base 时拒绝写入并给出修复命令; base 之后的非重叠改动自动合并,
+# 同一区块的改动冲突时拒绝写入并输出差异; 本地快照缺失时沿 Git 历史找回基准.
+
+exec git init -q -b main
+pair init
+pair update discover --file in/discover.md
+grab BASE0 '新 base: ([0-9a-f]{12})' stdout
+exec git add -A
+exec git commit -q -m init
+
+# 漏传 --base: 拒绝, 输出设计文档 7.1 节格式的原因与修复操作, 文件不变.
+stdin in/tabs.md
+! pair update 'discover#tabs'
+cmp stderr want/missing-base.txt
+! stdout .
+cmp .pair/modules/discover.md in/discover.md
+
+# 另一方以 BASE0 修改了 list.
+stdin in/list-a.md
+pair update 'discover#list' --base $BASE0
+
+# 以过期的 BASE0 修改不重叠的 tabs: 三路合并保留双方改动.
+stdin in/tabs.md
+pair update 'discover#tabs' --base $BASE0
+stdout '已更新 discover#tabs'
+cmp .pair/modules/discover.md want/merged.md
+
+# 以过期的 BASE0 再改 list: 同区块冲突, 拒绝写入并给出重新读取后再更新的命令.
+stdin in/list-b.md
+! pair update 'discover#list' --base $BASE0
+stderr '^拒绝更新: 「discover」在 base 之后已被修改, 以下位置与本次更新冲突: section:list\.$'
+stderr '^修复操作: 请执行 `pair show discover#list` 重新读取最新内容与 base, 在其基础上合入本次改动后重新执行 `pair update discover#list --base <hash>`\.$'
+stderr '^-列表正文 A\.$'
+stderr '^\+列表正文 B\.$'
+cmp .pair/modules/discover.md want/merged.md
+
+# 未知的 base: 拒绝并提示重新获取.
+stdin in/list-b.md
+! pair update 'discover#list' --base 000000000000
+stderr '基准哈希 `000000000000` 在本地快照与 .pair/modules/discover.md 的 Git 历史中都不存在'
+stderr '修复操作: 请先执行 `pair show discover` 获取新的 base 哈希'
+
+# 本地快照被清理后, BASE0 仍能从 Git 历史中找回: 只改 stage 时自动合并成功.
+rm .git/pair/bases
+stdin in/stage.md
+pair update 'discover#stage' --base $BASE0
+stdout '已更新 discover#stage'
+grep '舞台正文已更新' .pair/modules/discover.md
+grep '列表正文 A' .pair/modules/discover.md
+grep '分类正文已更新' .pair/modules/discover.md
+
+# 参数用法错误以退出码 2 结束并给出用法.
+! pair update 'discover#stage' --no-change x --file in/stage.md
+stderr '用法错误: --no-change 不写入正文, 不能与 --file 同时使用'
+
+-- .gitignore --
+.tmp/
+-- in/discover.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/tabs.md --
+
+分类正文已更新.
+-- in/list-a.md --
+
+列表正文 A.
+-- in/list-b.md --
+
+列表正文 B.
+-- in/stage.md --
+
+舞台正文已更新.
+-- want/missing-base.txt --
+拒绝更新: 模块 `discover` 已存在, 但本次调用未提供基准哈希 `--base`, 直接写入可能覆盖已有内容.
+修复操作: 请先执行 `pair show discover` 读取最新内容并获取文件末尾输出的 base 哈希, 再重新执行 `pair update discover#tabs --base <hash> <<'EOF'`.
+-- want/merged.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文已更新.
+
+## 列表 <!-- #list -->
+
+列表正文 A.
