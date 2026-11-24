@@ -249,3 +249,24 @@ func TestTrailers(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyMessage(t *testing.T) {
+	tmpl := "\n\nPair-Skip: a\n# 请输入提交说明\n#\n"
+	tests := []struct {
+		name, msg string
+		editor    bool
+		want      bool
+	}{
+		{"编辑器中未填写", tmpl, true, true},
+		{"-m 空串", "\nPair-Skip: a\n", false, true},
+		{"只有 Signed-off-by", "\nSigned-off-by: t <t@x>\nPair-Skip: a\n", true, true},
+		{"剪切线之后不属于提交信息", tmpl + "# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n", true, true},
+		{"填写了标题", "标题\n" + tmpl, true, false},
+		{"未经编辑器时 # 开头的行是正文", "#12 修复\n\nPair-Skip: a\n", false, false},
+	}
+	for _, tt := range tests {
+		if got := EmptyMessage(tt.msg, "Pair-Skip", tt.editor); got != tt.want {
+			t.Errorf("%s: EmptyMessage = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

@@ -69,6 +69,11 @@ func (r *Repo) Branch(ctx context.Context) (string, error) {
 	return "HEAD@" + strings.TrimSpace(string(out)), nil
 }
 
+// Detached 报告 Branch 返回的名称是否表示分离头指针.
+func Detached(branch string) bool {
+	return strings.HasPrefix(branch, "HEAD@")
+}
+
 // HeadPath 返回需要监听以感知分支切换的 HEAD 文件路径.
 func (r *Repo) HeadPath() string {
 	return r.GitDir + "/HEAD"
@@ -205,6 +210,25 @@ func Trailers(message, key string) []string {
 		}
 	}
 	return values
+}
+
+// EmptyMessage 报告提交信息去掉 key trailer 行后按 git 的规则是否为空: 只剩空白行与 Signed-off-by 行.
+// editor 表示提交信息经过编辑器, 此时 git 还会去掉以 # 开头的注释行与剪切线之后的内容.
+func EmptyMessage(message, key string, editor bool) bool {
+	for _, l := range strings.Split(message, "\n") {
+		l = strings.TrimSuffix(l, "\r")
+		if editor && l == scissors {
+			break
+		}
+		i := separator(l)
+		switch {
+		case strings.TrimSpace(l) == "", editor && strings.HasPrefix(l, "#"), strings.HasPrefix(l, "Signed-off-by:"):
+		case i > 0 && strings.EqualFold(strings.TrimSpace(l[:i]), key):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // separator 返回 trailer 行中冒号的位置: 冒号前须是由 ASCII 字母、数字与连字符组成的 key,
