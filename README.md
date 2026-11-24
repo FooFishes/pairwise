@@ -30,6 +30,8 @@ pair serve --open         # 打开本地工作台
 /plugin install pair@pairwise
 ```
 
+插件的 Hook 直接执行 `pair`，需保证启动 Claude Code 的环境中 `PATH` 能找到它，否则每次工具调用都会提示 Hook 错误。
+
 不装插件也能用：Agent 按 `SKILL.md` 的指引调用无状态命令，提交时由 `commit-msg` 钩子兜底检查文档是否同步。
 
 ## 文档

@@ -54,7 +54,7 @@ testdata/script/     testscript 端到端用例
 
 - **哪些命令不经常驻进程**：`init`、`check`、`merge-driver`、`git-hook prepare-commit-msg / commit-msg` 在进程内直接执行（CI 与 `git merge` 期间不应拉起后台进程）；其余命令一律经 Unix Socket 调用常驻进程，未运行时自动拉起。
 - **常驻进程入口**：隐藏子命令 `pair daemon` 以前台方式运行常驻进程，自动拉起时以脱离终端的子进程执行它；`pair serve` 确保常驻进程运行并输出界面地址，`pair serve --stop` 停止当前工作树的常驻进程。
-- **Socket 路径**：运行目录取 `$PAIR_RUNTIME_DIR`，未设置时依次取 `$XDG_RUNTIME_DIR` 与系统临时目录；其下的每用户私有目录 `pair-<uid>`（权限 `0700`，属主必须是当前用户，否则报错）中的 `<工作树根路径 SHA-256 前 16 位>.sock`。路径超过系统上限（macOS 104 字节、Linux 108 字节）时报错，并给出设置更短 `PAIR_RUNTIME_DIR` 的修复命令。
+- **Socket 路径**：运行目录取 `$PAIR_RUNTIME_DIR`，未设置时依次取 `$XDG_RUNTIME_DIR` 与系统临时目录；其下的每用户私有目录 `pair-<uid>`（权限 `0700`，属主必须是当前用户，否则报错）中的 `<工作树根路径 SHA-256 前 16 位>.sock`；Windows 上私有目录名为 `pair`，访问控制交给 ACL，不检查属主与权限位。路径连同结尾的 NUL 放不进系统上限（macOS 104 字节、Linux 108 字节）时报错，并给出设置更短 `PAIR_RUNTIME_DIR` 的修复命令。
 - **运行信息**：`$GIT_DIR/pair/daemon.json` 记录 pid、socket 路径、HTTP 端口与构建指纹；CLI 每次建立连接时按其中记录的 socket 连接（没有记录时按上一条推算），因此运行目录环境变量与常驻进程不同也能连上；文件锁被占用却连不上时报错并给出 `kill <pid>`。CLI 发现构建指纹与自身不一致（升级或重新编译）时请求旧进程退出，等它释放文件锁后再拉起，并发的多个 CLI 最终连上同一个新实例。构建指纹取可执行文件的大小与修改时间。工作树未初始化时不拉起常驻进程。
 - **事件推送**：RPC 走 Connect，事件流是独立的标准 SSE 端点 `GET /events`，用 `id:` 字段携带递增序号，支持 `Last-Event-ID` 请求头与 `?since=` 参数补发；浏览器直接用 `EventSource`，`pair watch --jsonl` 经 Unix Socket 读同一端点。
 - **状态校准与配置**：每个请求开始时按当时的 HEAD 与磁盘内容校准分支与文档索引，紧随 `git checkout` 或外部编辑的命令不依赖文件监听的去抖；文件监听只负责推送事件。`.pair/config.toml` 随索引一起重新读取，内容无效时沿用上一份有效配置。
@@ -92,29 +92,29 @@ testdata/script/     testscript 端到端用例
 - **`check`**：Frontmatter 字段、ID 与文件名一致、每个 `##` 都带锚点、文件级命名空间唯一、容器成对闭合、容器内子项唯一、`@module#sec` 引用可解析、decision `targets` 是不带 `@` 的 `module#sec` 且指向已有的 `##` 区块、`default_option` 有效；`sections` 中指向不存在区块的元数据报警告。
 - **`--strict`**：警告视为错误，并且存在任何 `decisions/*.md` 时报错。
 - **`--diff`**：不带参数检查暂存区（`--cached`），带 `<base-ref>` 检查 `<base-ref>...HEAD`；区间模式下扫描区间内全部提交信息中的 `Pair-Skip:` trailer。
-- **钩子**：`init --git-hooks` 写入 `prepare-commit-msg` 与 `commit-msg`，已存在的非 Pairwise 钩子不覆盖。跳过原因持久化在运行态 SQLite 中，两个钩子都在进程内直接打开它（WAL 支持与常驻进程并发），都不拉起常驻进程：`prepare-commit-msg` 用 `git interpret-trailers` 为每条待用原因追加 `Pair-Skip:` trailer（已有相同 trailer 时不重复），`commit-msg` 检查通过后清除待用原因。
+- **钩子**：`init --git-hooks` 写入 `prepare-commit-msg` 与 `commit-msg`，已存在的非 Pairwise 钩子不覆盖。跳过原因持久化在运行态 SQLite 中，两个钩子都在进程内直接打开它（WAL 支持与常驻进程并发），都不拉起常驻进程：`prepare-commit-msg` 用 `git interpret-trailers` 为每条待用原因追加 `Pair-Skip:` trailer（已有相同 trailer 时不重复），工作树处于 rebase、cherry-pick 或 revert 中（`$GIT_DIR` 下存在 `rebase-merge`、`sequencer`、`CHERRY_PICK_HEAD` 或 `REVERT_HEAD`）时不追加：重放的提交沿用原提交信息，待用原因不属于它们，且无冲突的重放不运行 `commit-msg`，追加的原因不会被清除。`commit-msg` 检查通过后只清除写入了本次提交信息的原因，编辑提交信息期间新登记的原因留给下次提交；提交信息除 `Pair-Skip` 与 `Signed-off-by` 行外为空时（编辑器中放弃填写、`-m ""`）中止提交并保留原因，代替 git 对空提交信息的中止。已知限制：无冲突的单次 `git revert` 不留标记，仍会追加 trailer；有待用原因时 `--allow-empty-message` 同样被中止。
 
 ### 4.6 会话与宿主 Hook
 
-本轮只接入 Claude Code，Hook 输入输出遵循其 JSON 协议。插件把 `SessionStart` 与 `CwdChanged` 都挂到 `pair hook session-start`，`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 分别挂到 `prompt-submit`、`before-tool`、`after-tool`、`before-stop`。
+本轮只接入 Claude Code，Hook 输入输出遵循其 JSON 协议。插件把 `SessionStart` 与 `CwdChanged` 都挂到 `pair hook session-start`，`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`SessionEnd` 分别挂到 `prompt-submit`、`before-tool`、`after-tool`、`before-stop`、`session-end`。
 
 - **会话身份**：
   - 路径 ①：`session-start` 在宿主提供环境文件（`CLAUDE_ENV_FILE`）时追加 `export PAIR_SESSION_ID=<session_id>`，CLI 的 `--session` 默认取这个变量。
   - 路径 ② 不实现：Claude Code 的 `updatedInput` 只在 `permissionDecision` 为 `allow` 或 `ask` 时生效，改写入参会绕过或改变用户的权限确认。
   - 路径 ③：会话启动时没有环境文件，`prompt-submit` 在本轮上下文中注入会话短码，要求 `pair` 命令带 `--session <短码>`；`--session` 同时接受会话 ID 与短码。
   - 路径 ④：`after-tool` 在 Bash 输出中找到 `bind_id: b-<n>` 时，把尚未关联会话的绑定关联到当前会话。
-- **`bind`**：为每个文档存下当前整文件 base 快照，绑定挂在当前分支。与其他会话的有效绑定命中同一区块（只写文档 ID 视为全部区块）且双方都不带 `--preserve` 时拒绝绑定，列出冲突区块与对方会话短码；其余情况记录绑定，并在输出末尾附带其他会话正在修改的区块。同一会话对同一文档重复 `bind` 以最新一次为准。`update` 未传 `--base` 时取会话对该文档的有效绑定基准，写入成功后把绑定基准推进到新 base。切换分支后旧分支上的绑定失效。
-- **回合**：`prompt-submit` 开启新回合，清空回合状态与待核对原因，会话状态置为 `running`。回合状态记录本回合读取的反馈 ID、`update` 过的文档、是否 `ask`、改过的工作树内源码路径（`after-tool` 取 `Edit / Write / MultiEdit / NotebookEdit` 的目标路径）、`skip-update` 原因与已拦截原因哈希；每次修改在单个事务内读改写。
+- **`bind`**：为每个文档存下当前整文件 base 快照，绑定挂在当前分支。与其他会话的有效绑定命中同一区块（只写文档 ID 视为全部区块）且双方都不带 `--preserve` 时拒绝绑定，列出冲突区块与对方会话短码；其余情况记录绑定，并在输出末尾附带其他会话正在修改的区块。同一会话对同一文档重复 `bind` 以最新一次为准。`update` 未传 `--base` 时取会话对该文档的有效绑定基准，写入成功后把绑定基准推进到新 base。切换到其他分支后旧分支上的绑定失效，分离头指针（如 rebase 中途停下）不算切换；会话结束（`session-end`，含 `/clear`）时释放该会话的全部绑定；宿主崩溃收不到会话结束，因此与工作台的会话列表一致，会话超过 24 小时没有活动（未登记的会话按绑定时间算）后其绑定不再参与冲突判断。
+- **回合**：`prompt-submit` 开启新回合，清空回合状态与待核对原因，会话状态置为 `running`。回合状态记录本回合读取的反馈 ID、`update` 过的文档（`--no-change` 不算）、是否 `ask`、改过的工作树内源码路径（`after-tool` 取 `Edit / Write / MultiEdit / NotebookEdit` 的目标路径）、`skip-update` 原因与已拦截原因哈希；每次修改在单个事务内读改写。
 - **`before-tool`**：按顺序判断，命中即输出，否则不输出、交给宿主默认的权限流程。
-  1. 当前分支有带 `--steer` 发送且尚未读取的反馈时，拒绝 Bash 中 `pair` 命令以外的工具调用，原因中给出 `pair drain`。
+  1. 当前分支有带 `--steer` 发送且尚未读取的反馈时，只放行 Bash 中的单条 `pair` 命令（不含换行、`;`、`&`、`|`、重定向与 `$`、反引号替换），拒绝其余工具调用，原因中给出 `pair drain`。
   2. 拒绝 `Edit / Write / MultiEdit / NotebookEdit` 写入 `.pair/**`，原因中给出对应的 `pair update` 命令。
   3. 写入命中模块 `scope` 的源码而本会话没有绑定该模块时，以附加上下文提示 `pair bind <module>`；同一模块每回合只提示一次。
 - **`before-stop`**：按三步判断，第一个命中的原因拦截。
   1. 当前分支有已发送尚未读取的反馈：列出 ID 与摘要，要求执行 `pair drain` 并在本回合闭环。
   2. 本回合读取过的反馈仍未闭环：列出 ID 与剩余目标。
-  3. 本回合改过命中 `scope` 的源码，而涉及的模块本回合既没有 `update` 或 `ask`，也没有 `skip-update`：会话对该模块的绑定带 `--preserve` 时放行并登记其原因为跳过原因，否则拦截并给出 `pair update` 与 `pair skip-update` 两种出口。
+  3. 本回合改过命中 `scope` 的源码，而涉及的模块本回合既没有 `update` 或 `ask`，也没有 `skip-update`：会话对该模块的绑定带 `--preserve` 时放行并登记其原因为跳过原因（在回合结束放行时登记，被前两步拦截期间不登记），否则拦截并给出 `pair update` 与 `pair skip-update` 两种出口。
   - 拦截原因哈希包含涉及的反馈 ID 与模块 ID，新发送的反馈产生新原因。同一原因在一个回合内只拦截一次；再次结束时放行，把原因记为会话的待核对原因（`Session.unverified`）并推送 `session_changed`，工作台据此标记，下一回合开始时清空。放行时会话状态置为 `idle`。
-- **失败处理**：拦截只通过 JSON 输出表达，`pair hook` 永远不以退出码 2 结束。不在已初始化的工作树中时静默放行；其他失败（输入无法解析、常驻进程不可用）以退出码 1 结束并把原因写到 stderr，宿主显示为非阻塞错误。
+- **失败处理**：拦截只通过 JSON 输出表达，`pair hook` 永远不以退出码 2 结束。不在已初始化的工作树中时静默放行；其他失败（输入无法解析、常驻进程不可用；`tool_input` 只按 Bash 与编辑工具取用，MCP 等工具的入参结构不影响解析）以退出码 1 结束并把原因写到 stderr，宿主显示为非阻塞错误。
 
 ## 5. 验收标准
 
