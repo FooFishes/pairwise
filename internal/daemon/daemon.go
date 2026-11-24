@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -61,12 +62,31 @@ type Info struct {
 // Version 由构建时 -ldflags 注入.
 var Version = "dev"
 
-// SocketPath 返回工作树的 Unix Socket 路径: $PAIR_RUNTIME_DIR 或系统临时目录下的
-// pair-<工作树根路径 SHA-256 前 16 位>.sock.
-func SocketPath(root string) string {
+// SocketPath 返回工作树的 Unix Socket 路径: 运行目录 ($PAIR_RUNTIME_DIR, 其次 $XDG_RUNTIME_DIR,
+// 再次系统临时目录) 下每用户私有目录中的 <工作树根路径 SHA-256 前 16 位>.sock.
+// 私有目录不存在时以 0700 创建, 已存在时必须通过 checkPrivate.
+func SocketPath(root string) (string, error) {
+	runtime := cmp.Or(os.Getenv("PAIR_RUNTIME_DIR"), os.Getenv("XDG_RUNTIME_DIR"), os.TempDir())
+	dir := filepath.Join(runtime, userDir)
 	sum := sha256.Sum256([]byte(root))
-	dir := cmp.Or(os.Getenv("PAIR_RUNTIME_DIR"), os.TempDir())
-	return filepath.Join(dir, "pair-"+hex.EncodeToString(sum[:8])+".sock")
+	sock := filepath.Join(dir, hex.EncodeToString(sum[:8])+".sock")
+	// sun_path 还要容纳结尾的空字符.
+	if limit := len(syscall.RawSockaddrUnix{}.Path); len(sock) >= limit {
+		return "", fmt.Errorf("socket 路径 %s 长 %d 字节, 加上结尾空字符超出系统上限 %d 字节.\n修复操作: 执行 `export PAIR_RUNTIME_DIR=/tmp` 改用更短的运行目录后重试",
+			sock, len(sock), limit)
+	}
+	// 运行目录可以尚不存在; 私有目录位置上已有的任何东西 (文件、符号链接) 都交给 checkPrivate 判断.
+	err := os.MkdirAll(runtime, 0o700)
+	if err == nil {
+		err = os.Mkdir(dir, 0o700)
+	}
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("无法创建 socket 目录 %s: %w.\n修复操作: 执行 `export PAIR_RUNTIME_DIR=$HOME/.cache/pair` 改用当前用户可写的运行目录后重试", dir, err)
+	}
+	if err := checkPrivate(dir); err != nil {
+		return "", err
+	}
+	return sock, nil
 }
 
 // InfoPath 返回 daemon.json 的路径.
@@ -140,7 +160,11 @@ func Run(ctx context.Context, dir string, newService NewService) error {
 		return err
 	}
 
-	sock := SocketPath(r.Root)
+	sock, err := SocketPath(r.Root)
+	if err != nil {
+		return err
+	}
+	// 崩溃残留的 socket 文件会使监听失败.
 	if err := os.Remove(sock); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -150,15 +174,12 @@ func Run(ctx context.Context, dir string, newService NewService) error {
 	}
 	defer svc.Close()
 
-	// UnixListener 关闭时自动删除 socket 文件.
+	// socket 位于私有目录中, 由目录权限隔离其他用户; UnixListener 关闭时自动删除 socket 文件.
 	unixLn, err := net.Listen("unix", sock)
 	if err != nil {
 		return err
 	}
 	defer unixLn.Close()
-	if err := os.Chmod(sock, 0o600); err != nil {
-		return err
-	}
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err

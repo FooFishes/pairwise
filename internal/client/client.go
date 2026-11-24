@@ -76,8 +76,12 @@ func newClient(root, stateDir string) *Client {
 	// 不设整体超时: ask --wait 长轮询与 SSE 都是长连接.
 	c.http = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			sock, err := c.socket()
+			if err != nil {
+				return nil, err
+			}
 			var d net.Dialer
-			return d.DialContext(ctx, "unix", c.socket())
+			return d.DialContext(ctx, "unix", sock)
 		},
 	}}
 	c.PairServiceClient = pairv1connect.NewPairServiceClient(connect.NewClient(connecthttp.NewTransport(c.http, baseURL)))
@@ -86,9 +90,9 @@ func newClient(root, stateDir string) *Client {
 
 // socket 返回 daemon.json 记录的 socket 路径, 没有记录时按当前环境推算. 每次建立连接时重新读取,
 // 使运行目录环境变量与常驻进程不同的 CLI 也能连上, 且不会被崩溃后残留的旧记录固定在失效的路径上.
-func (c *Client) socket() string {
+func (c *Client) socket() (string, error) {
 	if info, err := daemon.ReadInfo(c.stateDir); err == nil && info.Socket != "" {
-		return info.Socket
+		return info.Socket, nil
 	}
 	return daemon.SocketPath(c.Root)
 }
@@ -139,12 +143,16 @@ func Dial(ctx context.Context, dir string) (*Client, error) {
 
 // unreachable 返回常驻进程持有文件锁却无法连接时的错误.
 func (c *Client) unreachable() error {
+	sock, err := c.socket()
+	if err != nil {
+		return err
+	}
 	pid := "<pid>"
 	if info, err := daemon.ReadInfo(c.stateDir); err == nil {
 		pid = strconv.Itoa(info.PID)
 	}
 	return fmt.Errorf("常驻进程持有 %s, 但无法经 %s 连接 (socket 文件可能已被清理).\n修复操作: 执行 `kill %s` 结束该进程后重试",
-		daemon.LockPath(c.stateDir), c.socket(), pid)
+		daemon.LockPath(c.stateDir), sock, pid)
 }
 
 // spawn 以脱离终端的子进程拉起 `pair daemon` 并等待它可用. 多个 CLI 同时拉起时,
@@ -152,6 +160,10 @@ func (c *Client) unreachable() error {
 func (c *Client) spawn(ctx context.Context) error {
 	if _, err := os.Stat(filepath.Join(c.Root, repo.Dir)); errors.Is(err, fs.ErrNotExist) {
 		return repo.ErrNotInitialized
+	}
+	// 常驻进程继承当前环境推算 socket 路径, 推算失败时直接报错而不拉起注定失败的进程.
+	if _, err := daemon.SocketPath(c.Root); err != nil {
+		return err
 	}
 	exe, err := executable()
 	if err != nil {
@@ -248,18 +260,6 @@ func waitUntil(ctx context.Context, cond func() bool) bool {
 		}
 	}
 	return true
-}
-
-// Running 报告 dir 所在工作树的常驻进程是否在运行, 不会拉起.
-func Running(ctx context.Context, dir string) (*Client, bool) {
-	c, err := open(ctx, dir)
-	if err != nil {
-		return nil, false
-	}
-	if _, err := c.ping(ctx); err != nil {
-		return nil, false
-	}
-	return c, true
 }
 
 // Events 订阅 SSE 事件流, 从序号 since 之后开始, 断线时凭最后的序号自动重连.

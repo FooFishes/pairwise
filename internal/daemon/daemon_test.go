@@ -70,8 +70,8 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(info.Socket); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("socket %s: %v, %v", info.Socket, fi, err)
+	if fi, err := os.Stat(filepath.Dir(info.Socket)); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("socket 目录 %s: %v, %v", filepath.Dir(info.Socket), fi, err)
 	}
 
 	if err := Run(ctx, root, nil); err == nil || err.Error() != "常驻进程已在运行" {

@@ -22,7 +22,11 @@ func TestEventsReconnect(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("PAIR_RUNTIME_DIR", dir)
 	c := newClient("/repo", dir)
-	ln, err := net.Listen("unix", c.socket())
+	sock, err := c.socket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
