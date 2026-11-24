@@ -262,7 +262,10 @@ func TestDecisionClosure(t *testing.T) {
 	if len(resp.DeletedDecisions) != 0 || len(resp.OpenDecisions) != 1 || len(resp.OpenDecisions[0].Progress) != 1 {
 		t.Fatalf("首个目标更新后 resp = %v", resp)
 	}
-	resp = must(w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#list", Resolves: []string{"shop-policy"}, NoChange: "列表规则不变"}))
+	if _, err := w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#stage", Resolves: []string{"shop-policy"}, NoChange: "x"}); err == nil || !strings.Contains(err.Error(), "已经更新过") {
+		t.Fatalf("已更新的目标再标记无需改动 err = %v", err)
+	}
+	resp = must(w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#list", Resolves: []string{"shop-policy"}, NoChange: "列表规则不变", SessionId: "s2"}))
 	if !slices.Equal(resp.DeletedDecisions, []string{"shop-policy"}) || !slices.Equal(resp.Resolved, []string{"shop-policy"}) || len(resp.OpenDecisions) != 0 {
 		t.Fatalf("全部目标完成后 resp = %v", resp)
 	}
@@ -276,6 +279,10 @@ func TestDecisionClosure(t *testing.T) {
 	turn := must(w.store.Turn("s1"))
 	if !turn.Asked || !slices.Equal(turn.Drained, []string{"shop-policy"}) || !slices.Equal(turn.Updated, []string{"discover"}) {
 		t.Errorf("turn = %+v", turn)
+	}
+	// --no-change 不写文档, 不算本回合更新过该文档.
+	if turn := must(w.store.Turn("s2")); len(turn.Updated) != 0 {
+		t.Errorf("--no-change 后 turn = %+v", turn)
 	}
 
 	// 以同一 ID 重新提交的是新一轮问题: 不带上一轮的进度, 闭环前须等开发者确认.

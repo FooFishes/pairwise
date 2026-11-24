@@ -29,6 +29,9 @@ func (w *Workspace) Ask(ctx context.Context, req *pairv1.AskRequest) (*pairv1.As
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Sprintf("问题 ID %q 不能带 #.\n修复操作: 执行 `pair ask <id> --file <doc.md>`, id 只能包含字母、数字、- 与 _", req.Id))
 	}
+	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
+		return nil, err
+	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
 	ix, branch, err := w.sync(ctx)
@@ -92,6 +95,9 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 	if err != nil {
 		return nil, err
 	}
+	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
+		return nil, err
+	}
 	e := ix.Decision(req.Id)
 	if e == nil || e.Doc == nil {
 		return nil, connect.NewError(connect.CodeNotFound,
@@ -153,6 +159,9 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 func (w *Workspace) Drain(ctx context.Context, req *pairv1.DrainRequest) (*pairv1.DrainResponse, error) {
 	ix, branch, err := w.sync(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
 		return nil, err
 	}
 	items, err := w.store.Drain(branch, req.SessionId)

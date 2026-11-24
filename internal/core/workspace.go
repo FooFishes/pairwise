@@ -16,6 +16,7 @@ import (
 	"github.com/FooFishes/pairwise/internal/check"
 	"github.com/FooFishes/pairwise/internal/daemon"
 	"github.com/FooFishes/pairwise/internal/doc"
+	"github.com/FooFishes/pairwise/internal/gitx"
 	"github.com/FooFishes/pairwise/internal/repo"
 	"github.com/FooFishes/pairwise/internal/store"
 )
@@ -32,6 +33,7 @@ const (
 	evDrained        = "drained"
 	evResolved       = "resolved"
 	evDecisionClosed = "decision_closed"
+	evSessionChanged = "session_changed"
 )
 
 // Workspace 是一个工作树的业务状态: 文档索引、运行态存储与事件订阅.
@@ -53,6 +55,8 @@ type Workspace struct {
 
 	// wmu 串行化写 .pair/ 文件的操作, 使读取磁盘、合并与写回之间不被其他写入穿插.
 	wmu sync.Mutex
+	// bmu 串行化 bind, 使冲突判定与记录之间不被其他会话的绑定穿插.
+	bmu sync.Mutex
 
 	// subMu 同时串行化事件持久化与扇出, 保证订阅者按序号递增收到事件.
 	subMu sync.Mutex
@@ -84,6 +88,11 @@ func New(ctx context.Context, dir string) (daemon.Service, error) {
 	}
 	st, err := store.Open(r.StateDir)
 	if err != nil {
+		return nil, err
+	}
+	// 常驻进程未运行期间切换过分支时, 旧分支上的绑定同样失效.
+	if err := invalidateBindings(st, branch); err != nil {
+		st.Close()
 		return nil, err
 	}
 	return &Workspace{
@@ -140,12 +149,20 @@ func (w *Workspace) syncBranch(ctx context.Context) error {
 	w.branch, w.head = branch, head
 	w.mu.Unlock()
 	if changed {
-		if err := w.store.InvalidateBindings(branch); err != nil {
+		if err := invalidateBindings(w.store, branch); err != nil {
 			return err
 		}
 		w.emit(&pairv1.Event{Type: evBranchChanged, Branch: branch})
 	}
 	return nil
+}
+
+// invalidateBindings 使不属于 branch 的绑定失效. 分离头指针 (如 rebase 中途停下) 不算切换分支, 回到原分支后绑定仍然有效.
+func invalidateBindings(st *store.Store, branch string) error {
+	if gitx.Detached(branch) {
+		return nil
+	}
+	return st.InvalidateBindings(branch)
 }
 
 // reload 从磁盘重建索引, 对内容哈希变化 (含新增与删除) 的文档发 doc_changed, 返回新索引.
@@ -347,17 +364,13 @@ func (w *Workspace) Status(ctx context.Context, _ *pairv1.StatusRequest) (*pairv
 	return resp, nil
 }
 
-// touchTurn 在请求带会话时更新该会话当前回合的累计状态.
+// touchTurn 在请求带会话时, 在单个事务内修改该会话当前回合的累计状态.
 func (w *Workspace) touchTurn(sessionID string, f func(t *store.Turn)) error {
 	if sessionID == "" {
 		return nil
 	}
-	t, err := w.store.Turn(sessionID)
-	if err != nil {
-		return err
-	}
-	f(t)
-	return w.store.SaveTurn(t)
+	_, err := w.store.UpdateTurn(sessionID, f)
+	return err
 }
 
 // appendNew 把 ids 中尚未出现的项追加到 list.

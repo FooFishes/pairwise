@@ -41,7 +41,7 @@ func findDoc(ix *repo.Index, id string) (*repo.Entry, error) {
 	}
 	if e.Doc == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("%s 无法解析: %v, 不能按区块合并.\n修复操作: 直接编辑 %[1]s 修正 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 执行 `pair check` 确认后重试", e.Rel, e.Err))
+			fmt.Sprintf("%s 无法解析: %v, 不能按区块处理.\n修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖", e.Rel, e.Err, e.ID))
 	}
 	return e, nil
 }
@@ -176,15 +176,19 @@ func (w *Workspace) Lookup(ctx context.Context, req *pairv1.LookupRequest) (*pai
 }
 
 // relPath 把绝对路径或相对工作树根目录的路径转换为相对路径. 工作树根已解析过符号链接,
-// 因此绝对路径的目录也先解析符号链接; 文件本身可能已被删除, 只解析其所在目录.
+// 因此绝对路径也先解析符号链接; 文件可能已被删除或将要新建在尚不存在的目录中, 只解析最深的已存在祖先目录.
 func (w *Workspace) relPath(p string) string {
 	if !filepath.IsAbs(p) {
 		return filepath.ToSlash(filepath.Clean(p))
 	}
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-		p = filepath.Join(dir, filepath.Base(p))
+	for dir, rest := filepath.Dir(p), filepath.Base(p); ; dir, rest = filepath.Dir(dir), filepath.Join(filepath.Base(dir), rest) {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return w.repo.Rel(filepath.Join(real, rest))
+		}
+		if filepath.Dir(dir) == dir {
+			return w.repo.Rel(p)
+		}
 	}
-	return w.repo.Rel(p)
 }
 
 // Check 校验全部文档.

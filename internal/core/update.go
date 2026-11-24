@@ -42,6 +42,9 @@ func (w *Workspace) Update(ctx context.Context, req *pairv1.UpdateRequest) (*pai
 	if err != nil {
 		return nil, err
 	}
+	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
+		return nil, err
+	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
 	ix, branch, err := w.sync(ctx)
@@ -64,7 +67,20 @@ func (w *Workspace) Update(ctx context.Context, req *pairv1.UpdateRequest) (*pai
 	if err := w.settle(ix, branch, fbs, resp); err != nil {
 		return nil, err
 	}
-	err = w.touchTurn(req.SessionId, func(tu *store.Turn) { tu.Updated = appendNew(tu.Updated, t.Doc) })
+	// 写入后会话的绑定基准推进到新 base, 下次省略 --base 时以本次结果为共同祖先.
+	if req.SessionId != "" && resp.Base != "" {
+		advanced, err := w.store.AdvanceBinding(req.SessionId, t.Doc, resp.Base)
+		if err != nil {
+			return nil, err
+		}
+		if advanced {
+			w.emit(&pairv1.Event{Type: evSessionChanged, Branch: branch, SessionId: req.SessionId})
+		}
+	}
+	// --no-change 不写文档, 不算本回合更新过该文档.
+	if req.NoChange == "" {
+		err = w.touchTurn(req.SessionId, func(tu *store.Turn) { tu.Updated = appendNew(tu.Updated, t.Doc) })
+	}
 	return resp, err
 }
 
@@ -125,6 +141,10 @@ func (w *Workspace) noChange(ix *repo.Index, branch string, t doc.Target, req *p
 				fmt.Sprintf("「%s」不是问题「%s」的目标, 其 targets 为 %s.\n修复操作: 对其中的目标执行 `pair update <module#sec> --resolves %[2]s --no-change \"<原因>\"`",
 					t, fb.Id, strings.Join(fb.Targets, ", ")))
 		}
+		if slices.ContainsFunc(fb.Progress, func(p *pairv1.TargetProgress) bool { return p.Status == progressUpdated && covers(t, p.Target) }) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Sprintf("问题「%s」的目标「%s」已经更新过, 不能再标记为无需改动.\n修复操作: 无需处理, 该目标已计入完成度; 执行 `pair stage list` 查看问题的剩余目标", fb.Id, t))
+		}
 	}
 	for _, fb := range fbs {
 		for _, target := range fb.Targets {
@@ -151,13 +171,17 @@ func (w *Workspace) write(ctx context.Context, ix *repo.Index, branch string, t 
 	var ours *doc.Document
 	var kind doc.Kind
 	var path string
-	var raw []byte
+	var oursRaw, raw []byte
 	var err error
-	if e := ix.Doc(t.Doc); e == nil {
+	switch e := ix.Doc(t.Doc); {
+	case e == nil:
 		kind, raw, err = created(t, req)
 		path, resp.Created = w.repo.Path(kind, t.Doc), true
-	} else if e, err = findDoc(ix, t.Doc); err == nil {
-		ours, kind, path = e.Doc, e.Kind, e.Path
+	case e.Doc == nil:
+		kind, path = e.Kind, e.Path
+		oursRaw, raw, err = overwrite(e, t, req)
+	default:
+		ours, kind, path, oursRaw = e.Doc, e.Kind, e.Path, e.Doc.Raw
 		raw, err = w.merged(ctx, e, t, req)
 	}
 	if err != nil {
@@ -172,11 +196,7 @@ func (w *Workspace) write(ctx context.Context, ix *repo.Index, branch string, t 
 		raw = render(result)
 	}
 	resp.Path = w.repo.Rel(path)
-	var oursRaw []byte
-	if ours != nil {
-		oursRaw = ours.Raw
-	}
-	if resp.Changed = ours == nil || !bytes.Equal(raw, oursRaw); resp.Changed {
+	if resp.Changed = resp.Created || !bytes.Equal(raw, oursRaw); resp.Changed {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, err
 		}
@@ -200,20 +220,42 @@ func (w *Workspace) write(ctx context.Context, ix *repo.Index, branch string, t 
 	return resp, nil
 }
 
-// created 构造新建文档: 只接受整文档输入, 剥离受控字段.
+// created 构造新建文档: 只接受整文档输入.
 func created(t doc.Target, req *pairv1.UpdateRequest) (doc.Kind, []byte, error) {
 	kind, err := newKind(t, req.Kind)
 	if err != nil {
 		return 0, nil, err
 	}
-	theirs, dirty, err := wholeTheirs(t, kind, req.Content, nil)
+	raw, err := fresh(t, kind, req.Content)
+	return kind, raw, err
+}
+
+// overwrite 以整文档输入覆盖无法解析的已有文件. 这类文件无法三路合并, 因此 --base 必须等于当前文件的整文件哈希,
+// 表明调用方读过当前内容. 返回当前文件与覆盖后的内容.
+func overwrite(e *repo.Entry, t doc.Target, req *pairv1.UpdateRequest) (cur, raw []byte, err error) {
+	if cur, err = os.ReadFile(e.Path); err != nil {
+		return nil, nil, err
+	}
+	if t.Section != "" || req.Base != doc.FileHash(cur) {
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Sprintf(
+			"拒绝更新: %s 无法解析 (%v), 不能按区块合并, 只能以完整文档覆盖, 且 --base 须等于当前文件的整文件哈希.\n"+
+				"修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖",
+			e.Rel, e.Err, e.ID))
+	}
+	raw, err = fresh(t, e.Kind, req.Content)
+	return cur, raw, err
+}
+
+// fresh 按整文档输入构造不经合并的内容, 剥离受控字段.
+func fresh(t doc.Target, kind doc.Kind, content string) ([]byte, error) {
+	theirs, dirty, err := wholeTheirs(t, kind, content, nil)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if dirty {
-		return kind, render(theirs), nil
+		return render(theirs), nil
 	}
-	return kind, theirs.Raw, nil
+	return theirs.Raw, nil
 }
 
 // merged 以基准快照为 base、磁盘当前文件为 ours、按输入构造的文档为 theirs 三路合并.
