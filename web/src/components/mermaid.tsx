@@ -31,7 +31,21 @@ function nodeTarget(el: Element, ids: string[]): string | undefined {
 
 let renderSeq = 0
 
-/** Mermaid 把图表按容器宽度等比渲染为可缩放平移的画布: 拖动平移, ⌘ 或双指捏合缩放, 点击与 links 同名的节点回调 onLink. */
+// 缩放下限: Mermaid 标签默认 16px, 适应画布宽度时不缩到约 11px 以下; 更宽的图表左对齐, 平移查看其余部分.
+const MIN_SCALE = 0.7
+const FADE = "32px"
+// 与画布内边距 p-4 一致.
+const INSET = 16
+
+/** fadeMask 在还有内容未显示的一侧渐隐, 提示可以平移. */
+function fadeMask(left: boolean, right: boolean) {
+  if (!left && !right) return undefined
+  const from = left ? `transparent, black ${FADE}` : "black"
+  const to = right ? `black calc(100% - ${FADE}), transparent` : "black"
+  return `linear-gradient(to right, ${from}, ${to})`
+}
+
+/** Mermaid 把图表按容器宽度等比渲染为可缩放平移的画布: 拖动或横向滑动平移, ⌘ 或双指捏合缩放, 点击与 links 同名的节点回调 onLink. */
 export function Mermaid({
   code,
   links,
@@ -49,11 +63,32 @@ export function Mermaid({
   const dark = useDark()
   const [ready, setReady] = useState(false)
   const [error, setError] = useState("")
+  const [edges, setEdges] = useState({ left: false, right: false })
 
-  // 未缩放时图表由 CSS 适应画布宽度, 适应画布即回到原始变换.
+  // 图表左右边界超出画布内边距的距离. 由布局尺寸与 panzoom 的最新变换算出, 不读 DOM 矩形: 变换要到下一帧才应用.
+  const overflow = () => {
+    const svg = stage.current?.querySelector("svg")
+    const t = pz.current?.getTransform()
+    if (!svg || !t) return { left: 0, right: 0 }
+    const width = svg.clientWidth
+    const x = t.x + t.scale * (INSET + Math.max(0, (stage.current!.clientWidth - 2 * INSET - width) / 2))
+    return { left: INSET - x, right: x + t.scale * width - (canvas.current!.clientWidth - INSET) }
+  }
+
+  // 还有内容未显示的一侧渐隐.
+  const measure = useEffectEvent(() => {
+    const o = overflow()
+    const left = o.left > 1
+    const right = o.right > 1
+    setEdges((e) => (e.left === left && e.right === right ? e : { left, right }))
+  })
+
+  // 图表按缩放下限仍放不下时整体缩小到内边距以内并垂直居中, 否则回到原始变换.
   const fit = () => {
-    pz.current?.zoomAbs(0, 0, 1)
-    pz.current?.moveTo(0, 0)
+    const el = stage.current!
+    const k = Math.min(1, (canvas.current!.clientWidth - 2 * INSET) / el.querySelector("svg")!.clientWidth)
+    pz.current?.zoomAbs(0, 0, k)
+    pz.current?.moveTo(INSET * (1 - k), (el.clientHeight * (1 - k)) / 2)
   }
 
   const zoom = (factor: number) => {
@@ -85,11 +120,13 @@ export function Mermaid({
       if (!alive) return
       const el = stage.current!
       el.innerHTML = svg
-      // 宽度随画布收缩但不超过原始宽度, 高度按 viewBox 比例; 各类图表的 useMaxWidth 默认值不一, 统一在此设置.
+      // 宽度随画布收缩, 介于缩放下限与原始宽度之间, 高度按 viewBox 比例; 各类图表的 useMaxWidth 默认值不一, 统一在此设置.
       const svgEl = el.querySelector("svg")!
+      const width = svgEl.viewBox.baseVal.width
       svgEl.removeAttribute("height")
       svgEl.setAttribute("width", "100%")
-      svgEl.style.maxWidth = `${svgEl.viewBox.baseVal.width}px`
+      svgEl.style.maxWidth = `${width}px`
+      svgEl.style.minWidth = `${width * MIN_SCALE}px`
       for (const g of svgEl.querySelectorAll("g.node, g.cluster")) {
         if (linkOf(g)) g.classList.add("pw-link")
       }
@@ -108,6 +145,8 @@ export function Mermaid({
           if (target) follow(target)
         },
       })
+      pz.current.on("transform", measure)
+      measure()
     })()
     return () => {
       alive = false
@@ -115,6 +154,28 @@ export function Mermaid({
       pz.current = null
     }
   }, [code, dark])
+
+  // 画布宽度变化时重新判断渐隐; 触控板横向滑动平移图表, 并阻止浏览器把它当作前进后退手势.
+  useEffect(() => {
+    const c = canvas.current!
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(c)
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+      // 图表放得下时不拦截; 放不下时平移到距画布边缘一个内边距为止.
+      const o = overflow()
+      const min = -Math.max(0, o.right)
+      const max = Math.max(0, o.left)
+      if (min === 0 && max === 0) return
+      e.preventDefault()
+      pz.current?.moveBy(Math.min(max, Math.max(min, -e.deltaX)), 0, false)
+    }
+    c.addEventListener("wheel", onWheel, { passive: false })
+    return () => {
+      ro.disconnect()
+      c.removeEventListener("wheel", onWheel)
+    }
+  }, [])
 
   return (
     <>
@@ -134,7 +195,9 @@ export function Mermaid({
         )}
       >
         {!ready && <Skeleton className="absolute inset-3" />}
-        <div ref={stage} className="p-4 [&>svg]:mx-auto" />
+        <div style={{ maskImage: fadeMask(edges.left, edges.right) }}>
+          <div ref={stage} className="p-4 [&>svg]:mx-auto" />
+        </div>
         {ready && (
           <div className="absolute right-2 bottom-2 flex gap-0.5 rounded-md border bg-background/90 p-0.5 opacity-0 shadow-xs backdrop-blur transition-opacity group-hover/canvas:opacity-100">
             <Button variant="ghost" size="icon-xs" aria-label="缩小" onClick={() => zoom(0.8)}>
