@@ -16,11 +16,11 @@ import (
 
 	pairv1 "github.com/FooFishes/pairwise/gen/pair/v1"
 	"github.com/FooFishes/pairwise/internal/check"
-	"github.com/FooFishes/pairwise/internal/client"
 	"github.com/FooFishes/pairwise/internal/doc"
 	"github.com/FooFishes/pairwise/internal/gitx"
 	"github.com/FooFishes/pairwise/internal/merge"
 	"github.com/FooFishes/pairwise/internal/repo"
+	"github.com/FooFishes/pairwise/internal/store"
 )
 
 // 本文件中的命令在进程内执行, 不经常驻进程: CI 与 git merge 期间不应拉起后台进程.
@@ -333,25 +333,38 @@ func (a *app) gitHookCmd() *cobra.Command {
 	)
 }
 
-// prepareCommitMsg 追加常驻进程中登记的跳过原因. editor 表示没有 -m/-F/-t 等来源, 提交信息待在编辑器中填写.
+// prepareCommitMsg 追加运行态中登记的跳过原因. editor 表示没有 -m/-F/-t 等来源, 提交信息待在编辑器中填写.
+// 进程内直接读运行态存储 (WAL 支持与常驻进程并发), 不拉起常驻进程.
 func prepareCommitMsg(ctx context.Context, msgfile string, editor bool) error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	r, err := repo.Open(ctx, dir)
+	if err != nil || replaying(r.Git.GitDir) {
+		return err
+	}
+	st, err := store.Open(r.StateDir)
 	if err != nil {
 		return err
 	}
-	c, err := client.Dial(ctx, r.Root())
-	if err != nil {
+	defer st.Close()
+	reasons, err := st.PendingSkips()
+	if err != nil || len(reasons) == 0 {
 		return err
 	}
-	res, err := c.PendingSkips(ctx, &pairv1.PendingSkipsRequest{})
-	if err != nil || len(res.Reasons) == 0 {
-		return err
+	return appendSkips(ctx, r.Git, msgfile, reasons, editor)
+}
+
+// replaying 报告工作树是否正在 rebase、cherry-pick 或 revert. 重放的提交沿用原提交信息, 待用的跳过原因不属于它们;
+// 无冲突的重放也不运行 commit-msg, 追加的原因不会被清除. git am 与 rebase --apply 不运行 prepare-commit-msg.
+func replaying(gitDir string) bool {
+	for _, name := range []string{"rebase-merge", "sequencer", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
+		if _, err := os.Stat(filepath.Join(gitDir, name)); err == nil {
+			return true
+		}
 	}
-	return appendSkips(ctx, r.Git, msgfile, res.Reasons, editor)
+	return false
 }
 
 // appendSkips 用 git interpret-trailers 把跳过原因以 Pair-Skip trailer 追加到提交信息, 相同 trailer 不重复.
@@ -399,6 +412,12 @@ func commitMsg(cmd *cobra.Command, msgfile string) error {
 	if err != nil {
 		return err
 	}
+	// 在编辑器中放弃填写或 -m "" 时, prepare-commit-msg 追加的 trailer 会使 git 不再按空提交信息中止, 由本钩子代为中止.
+	// git 未使用编辑器时以 GIT_EDITOR=: 运行钩子, 此时注释行也属于提交信息.
+	if len(res.SkipReasons) > 0 && gitx.EmptyMessage(string(msg), check.SkipTrailer, os.Getenv("GIT_EDITOR") != ":") {
+		fmt.Fprint(cmd.ErrOrStderr(), "提交已中止: 提交信息除 Pair-Skip trailer 外为空, 跳过原因保留到下次提交.\n修复操作: 重新执行 `git commit` 并填写提交信息\n")
+		return exitCode(1)
+	}
 	if !res.OK() {
 		var t text
 		t.line("提交被拒绝: 以下模块 scope 下的源码有改动, 但模块文档未同步更新.")
@@ -408,9 +427,22 @@ func commitMsg(cmd *cobra.Command, msgfile string) error {
 		fmt.Fprint(cmd.ErrOrStderr(), t.String())
 		return exitCode(1)
 	}
-	// 只在常驻进程已运行时清除 (提交期间不拉起后台进程); 不可用时不阻塞提交, 未清除的原因留待下次提交时再处理.
-	if c, ok := client.Running(ctx, r.Root()); ok {
-		_, _ = c.ConsumeSkips(ctx, &pairv1.ConsumeSkipsRequest{})
+	// 只清除写入了本次提交信息的跳过原因. 清除失败不阻塞提交, 未清除的原因留待下次提交时再处理.
+	if err := consumeSkips(r.StateDir, res.SkipReasons); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "pair: 未能清除已写入提交信息的跳过原因: %s\n", err)
 	}
 	return nil
+}
+
+// consumeSkips 在进程内清除运行态中的 reasons.
+func consumeSkips(stateDir string, reasons []string) error {
+	if len(reasons) == 0 {
+		return nil
+	}
+	st, err := store.Open(stateDir)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.ConsumeSkips(reasons)
 }

@@ -15,6 +15,8 @@ import (
 	"github.com/FooFishes/pairwise/gen/pair/v1/pairv1connect"
 	"github.com/FooFishes/pairwise/internal/client"
 	"github.com/FooFishes/pairwise/internal/daemon"
+	"github.com/FooFishes/pairwise/internal/gitx"
+	"github.com/FooFishes/pairwise/internal/hook"
 	"github.com/FooFishes/pairwise/internal/repo"
 )
 
@@ -334,8 +336,32 @@ func (a *app) bindCmd() *cobra.Command {
 		Short: "关联宿主会话与目标模块区块, 缓存整文件合并基准",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dial(cmd)
+			if err != nil {
+				return err
+			}
 			req := &pairv1.BindRequest{Targets: args, SessionId: a.session, Preserve: preserve}
-			return rpc(a, cmd, svc.Bind, req, func(res *pairv1.BindResponse) string { return bindText(req, res) })
+			res, err := c.Bind(cmd.Context(), req)
+			if err != nil {
+				return err
+			}
+			// 会话来自 --session 而不是 PAIR_SESSION_ID 时, 提示中的命令同样要带上它.
+			var flag string
+			if a.session != "" && cmd.Flags().Changed("session") {
+				flag = " --session " + a.session
+			}
+			if len(res.Conflicts) == 0 {
+				return a.reply(cmd, res, bindText(res, flag))
+			}
+			if a.json {
+				err = writeJSON(cmd.OutOrStdout(), res, true)
+			} else {
+				_, err = io.WriteString(cmd.ErrOrStderr(), bindConflictText(req, res, flag))
+			}
+			if err != nil {
+				return err
+			}
+			return exitCode(1)
 		},
 	}
 	cmd.Flags().StringVar(&preserve, "preserve", "", "保持规格模式: 声明只修缺陷、调样式或重构, 不改文档")
@@ -350,7 +376,7 @@ func (a *app) skipUpdateCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			req := &pairv1.SkipUpdateRequest{SessionId: a.session, Reason: reason}
-			return rpc(a, cmd, svc.SkipUpdate, req, func(*pairv1.SkipUpdateResponse) string { return skipText(reason) })
+			return rpc(a, cmd, svc.SkipUpdate, req, skipText)
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "不更新文档的原因")
@@ -381,9 +407,20 @@ func (a *app) watchCmd() *cobra.Command {
 				}
 				since = ping.LastSeq
 			}
+			// 事件带的是会话 ID, --session 给的是短码时先换成 ID.
+			session := a.session
+			if session != "" {
+				res, err := c.ListSessions(cmd.Context(), &pairv1.ListSessionsRequest{})
+				if err != nil {
+					return err
+				}
+				if i := slices.IndexFunc(res.Sessions, func(s *pairv1.Session) bool { return s.ShortCode == session }); i >= 0 {
+					session = res.Sessions[i].Id
+				}
+			}
 			events, _ := c.Events(cmd.Context(), since)
 			for ev := range events {
-				if a.session != "" && ev.SessionId != "" && ev.SessionId != a.session {
+				if session != "" && ev.SessionId != "" && ev.SessionId != session {
 					continue
 				}
 				if err := writeJSON(cmd.OutOrStdout(), ev, false); err != nil {
@@ -409,7 +446,7 @@ func (a *app) sessionCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := &pairv1.SetSessionStateRequest{SessionId: a.session, State: args[0], Capabilities: capabilities}
 			return rpc(a, cmd, svc.SetSessionState, req, func(*pairv1.SetSessionStateResponse) string {
-				return fmt.Sprintf("会话 %s 状态: %s\n", a.session, args[0])
+				return fmt.Sprintf("会话 %s 状态: %s\n下一步: 继续当前任务; 状态变化时再次执行 `pair session state <idle|running|waiting>`\n", a.session, args[0])
 			})
 		},
 	}
@@ -417,49 +454,67 @@ func (a *app) sessionCmd() *cobra.Command {
 	return group("session", "宿主会话", state)
 }
 
-var hookEvents = []string{"session-start", "prompt-submit", "before-tool", "after-tool", "before-stop"}
-
 func (a *app) hookCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "hook <" + strings.Join(hookEvents, "|") + ">",
+		Use:   "hook <" + strings.Join(hook.Events, "|") + ">",
 		Short: "宿主生命周期 Hook: stdin 为宿主 JSON, 输出交回宿主",
-		// 退出码 2 在宿主中表示阻塞, 用法问题也只能以 1 结束, 因此参数在执行阶段自行校验, 未知参数忽略.
-		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		// 退出码 2 在宿主中表示阻塞, 拦截只经 JSON 输出表达; 参数一律在执行阶段自行校验, 失败只以 1 结束.
+		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 || !slices.Contains(hookEvents, args[0]) {
-				return fmt.Errorf("pair hook 需要恰好一个事件参数: %s", strings.Join(hookEvents, ", "))
+			if err := runHook(cmd, args); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "pair hook: %s\n", errMessage(err))
+				return exitCode(1)
 			}
-			payload, err := io.ReadAll(cmd.InOrStdin())
-			if err != nil {
-				return err
-			}
-			ctx := cmd.Context()
-			dir, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			// 不在已初始化的工作树中或常驻进程不可用时静默放行, 不能阻塞宿主.
-			if _, err := repo.Open(ctx, dir); err != nil {
-				return nil
-			}
-			c, err := client.Dial(ctx, dir)
-			if err != nil {
-				return nil
-			}
-			envFile := os.Getenv("CLAUDE_ENV_FILE")
-			res, err := c.Hook(ctx, &pairv1.HookRequest{Event: args[0], Payload: payload, EnvFile: envFile})
-			if err != nil {
-				return err
-			}
-			if envFile != "" && res.EnvFileAppend != "" {
-				if err := appendFile(envFile, res.EnvFileAppend); err != nil {
-					return err
-				}
-			}
-			_, err = cmd.OutOrStdout().Write(res.Output)
-			return err
+			return nil
 		},
 	}
+}
+
+// runHook 把宿主 JSON 交给工作树的常驻进程, 输出其回应. 不在已初始化的工作树中时静默放行.
+func runHook(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 || !slices.Contains(hook.Events, args[0]) {
+		return fmt.Errorf("需要恰好一个事件参数: %s", strings.Join(hook.Events, ", "))
+	}
+	payload, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return err
+	}
+	// 先按宿主给出的工作目录定位工作树, 输入无法解析时退回当前目录, 未初始化的目录一律不报错.
+	in, perr := hook.Parse(payload)
+	dir, err := os.Getwd()
+	if perr == nil && in.Cwd != "" {
+		dir, err = in.Cwd, nil
+	}
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	g, err := gitx.Open(ctx, dir)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(g.Root, repo.Dir)); err != nil {
+		return nil
+	}
+	if perr != nil {
+		return perr
+	}
+	c, err := client.Dial(ctx, g.Root)
+	if err != nil {
+		return err
+	}
+	envFile := os.Getenv("CLAUDE_ENV_FILE")
+	res, err := c.Hook(ctx, &pairv1.HookRequest{Event: args[0], Payload: payload, EnvFile: envFile})
+	if err != nil {
+		return err
+	}
+	if envFile != "" && res.EnvFileAppend != "" {
+		if err := appendFile(envFile, res.EnvFileAppend); err != nil {
+			return err
+		}
+	}
+	_, err = cmd.OutOrStdout().Write(res.Output)
+	return err
 }
 
 func appendFile(path, s string) error {

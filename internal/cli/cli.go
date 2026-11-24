@@ -97,10 +97,10 @@ func newRoot(newService daemon.NewService) *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
-	// 两个参数对全部命令生效: before-tool Hook 会给任意 pair 命令补上 --session.
+	// 两个参数对全部命令生效; --session 默认取 session-start Hook 写入宿主会话环境的 PAIR_SESSION_ID.
 	pf := root.PersistentFlags()
 	pf.BoolVar(&a.json, "json", false, "输出响应的 JSON")
-	pf.StringVar(&a.session, "session", os.Getenv("PAIR_SESSION_ID"), "宿主会话 ID, 默认取环境变量 PAIR_SESSION_ID")
+	pf.StringVar(&a.session, "session", os.Getenv("PAIR_SESSION_ID"), "宿主会话 ID 或短码, 默认取环境变量 PAIR_SESSION_ID")
 	root.AddCommand(
 		a.initCmd(), a.checkCmd(), a.mergeDriverCmd(), a.gitHookCmd(),
 		a.serveCmd(), a.statusCmd(), a.listCmd(), a.showCmd(), a.lookupCmd(),

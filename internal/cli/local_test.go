@@ -252,10 +252,23 @@ func TestExitCodes(t *testing.T) {
 		// 宿主把退出码 2 视为阻塞, hook 的参数问题只以 1 结束.
 		{[]string{"hook"}, 1},
 		{[]string{"hook", "bogus", "--bogus"}, 1},
+		{[]string{"hook", "before-tool", "--session"}, 1},
 	}
 	for _, tt := range tests {
 		if code, out, errOut := pair(t, tt.args...); code != tt.code {
 			t.Errorf("pair %v 退出码 %d, 期望 %d\n%s%s", tt.args, code, tt.code, out, errOut)
 		}
+	}
+}
+
+// TestHookWorktree 覆盖 hook 的失败处理: 未初始化的工作树静默放行, 已初始化时无法解析的输入以 1 结束.
+func TestHookWorktree(t *testing.T) {
+	root, _ := newRepo(t, nil)
+	if code, out, errOut := pair(t, "hook", "before-tool"); code != 0 || out+errOut != "" {
+		t.Errorf("未初始化: 退出码 %d\n%s%s", code, out, errOut)
+	}
+	writeFiles(t, root, map[string]string{".pair/config.toml": ""})
+	if code, _, errOut := pair(t, "hook", "before-tool"); code != 1 || !strings.Contains(errOut, "宿主 Hook 输入不是合法的 JSON") {
+		t.Errorf("无法解析的输入: 退出码 %d\n%s", code, errOut)
 	}
 }

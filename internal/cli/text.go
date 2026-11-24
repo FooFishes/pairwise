@@ -203,13 +203,18 @@ func showText(res *pairv1.ShowResponse) string {
 	t.line("")
 	d := res.GetDoc()
 	t.line("base: %s (%s 的整文件哈希)", res.Base, d.GetPath())
-	// 无法解析的文档不能经 update 合并, 只能直接修正文件.
+	decision := d.GetKind() == pairv1.DocKind_DOC_KIND_DECISION
+	// 无法解析的文档不能按区块合并, 只能以完整文档覆盖.
 	if i := slices.IndexFunc(d.GetDiagnostics(), func(g *pairv1.Diagnostic) bool { return g.Code == "parse-error" }); i >= 0 {
 		t.line("该文件无法解析: %s", d.Diagnostics[i].Message)
-		t.line("下一步: 直接编辑 %s 修正 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 再执行 `pair check` 确认", d.GetPath())
+		if decision {
+			t.line("下一步: 修正问题文档后执行 `pair ask %s --file <doc.md>` 重新提交, 覆盖该文件", d.GetId())
+		} else {
+			t.line("下一步: 以完整文档 (含 Frontmatter) 覆盖该文件: `pair update %s --base %s --file <doc.md>`", d.GetId(), res.Base)
+		}
 		return t.String()
 	}
-	if d.GetKind() == pairv1.DocKind_DOC_KIND_DECISION {
+	if decision {
 		if dec := d.GetDecision(); len(dec.GetTargets()) > 0 {
 			t.line("目标进度: %s", progressText(dec.Targets, dec.Progress))
 		}
@@ -531,7 +536,8 @@ func triggerText(res *pairv1.TriggerResponse) string {
 }
 
 // bindText 的首行固定为 "bind_id: <id>", after-tool Hook 从中提取绑定 ID 完成会话关联.
-func bindText(req *pairv1.BindRequest, res *pairv1.BindResponse) string {
+// flag 是提示中的命令需要带上的 --session 参数.
+func bindText(res *pairv1.BindResponse, flag string) string {
 	var t text
 	t.line("bind_id: %s", res.BindId)
 	session := "未关联会话"
@@ -547,23 +553,36 @@ func bindText(req *pairv1.BindRequest, res *pairv1.BindResponse) string {
 		docs = append(docs, fmt.Sprintf("%s: %s (base: %s)", d.DocId, secs, d.Base))
 	}
 	t.list(fmt.Sprintf("已绑定 (%s):", session), docs)
-	if req.Preserve != "" {
-		t.line("保持规格模式: %s; 回合结束时修改了源码而未改文档也直接放行, 发现必须改规则时仍可执行 `pair update` 或 `pair ask`", req.Preserve)
+	if res.Preserve != "" {
+		t.line("保持规格模式: %s; 回合结束时修改了源码而未改文档也直接放行, 发现必须改规则时仍可执行 `pair update` 或 `pair ask`", res.Preserve)
 	}
-	t.list("冲突:", res.Conflicts)
-	t.list("提示:", res.Notices)
+	t.list("其他会话正在修改 (与本次绑定不冲突, 提交时按区块自动合并):", res.Notices)
 	if res.SessionId != "" {
-		t.line("下一步: 本会话修改上述区块时执行 `pair update <doc#sec> <<'EOF'`, 已缓存 base, 可省略 `--base`")
+		t.line("下一步: 本会话修改上述区块时执行 `pair update <doc#sec>%s <<'EOF'`, 已缓存 base, 可省略 `--base`", flag)
 	} else {
 		t.line("下一步: 修改上述区块时执行 `pair update <doc#sec> --base <base> <<'EOF'`")
 	}
 	return t.String()
 }
 
-func skipText(reason string) string {
+// bindConflictText 说明绑定因与其他会话命中同一区块而被拒绝, flag 同 bindText.
+func bindConflictText(req *pairv1.BindRequest, res *pairv1.BindResponse, flag string) string {
 	var t text
-	t.line("已登记跳过原因: %s", reason)
-	t.line("下一步: 正常提交, prepare-commit-msg 钩子将自动追加 `Pair-Skip: %s` trailer; 未安装钩子时请手动加到提交信息末尾", reason)
+	t.list("拒绝绑定: 以下区块正被其他会话修改, 且双方都没有声明 --preserve, 未记录本次绑定:", res.Conflicts)
+	// 未关联会话时无法区分本会话经 after-tool 关联的绑定与其他会话的绑定.
+	if res.SessionId == "" {
+		t.line("本次绑定未关联会话: 若列出的短码属于本会话, 带上 `--session <短码>` 重新执行")
+	}
+	t.line("修复操作: 改为只绑定不重叠的区块后重新执行 `pair bind <doc#sec>...%s`; 只修缺陷、调样式或重构而不改规则时执行 "+
+		"`pair bind %s --preserve \"<原因>\"%[1]s`; 确需修改这些区块时等对方会话结束 (退出、/clear 或 24 小时无活动后其绑定自动释放) 再绑定",
+		flag, strings.Join(req.Targets, " "))
+	return t.String()
+}
+
+func skipText(res *pairv1.SkipUpdateResponse) string {
+	var t text
+	t.line("已登记跳过原因: %s", res.Reason)
+	t.line("下一步: 正常提交, prepare-commit-msg 钩子将自动追加 `Pair-Skip: %s` trailer; 未安装钩子时请手动加到提交信息末尾", res.Reason)
 	return t.String()
 }
 
