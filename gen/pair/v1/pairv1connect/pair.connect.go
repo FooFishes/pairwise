@@ -73,10 +73,6 @@ const (
 	PairServiceListSessionsProcedure = "/pair.v1.PairService/ListSessions"
 	// PairServiceHookProcedure is the procedure name of the PairService's Hook RPC.
 	PairServiceHookProcedure = "/pair.v1.PairService/Hook"
-	// PairServicePendingSkipsProcedure is the procedure name of the PairService's PendingSkips RPC.
-	PairServicePendingSkipsProcedure = "/pair.v1.PairService/PendingSkips"
-	// PairServiceConsumeSkipsProcedure is the procedure name of the PairService's ConsumeSkips RPC.
-	PairServiceConsumeSkipsProcedure = "/pair.v1.PairService/ConsumeSkips"
 	// PairServiceShutdownProcedure is the procedure name of the PairService's Shutdown RPC.
 	PairServiceShutdownProcedure = "/pair.v1.PairService/Shutdown"
 )
@@ -250,20 +246,6 @@ var (
 			Procedure:  PairServiceHookProcedure,
 		}
 	})
-	pairServicePendingSkipsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_pair_v1_pair_proto.Services().ByName("PairService").Methods().ByName("PendingSkips"),
-			Procedure:  PairServicePendingSkipsProcedure,
-		}
-	})
-	pairServiceConsumeSkipsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_pair_v1_pair_proto.Services().ByName("PairService").Methods().ByName("ConsumeSkips"),
-			Procedure:  PairServiceConsumeSkipsProcedure,
-		}
-	})
 	pairServiceShutdownSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -303,8 +285,6 @@ type PairServiceClient interface {
 	SetSessionState(context.Context, *v1.SetSessionStateRequest) (*v1.SetSessionStateResponse, error)
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
 	Hook(context.Context, *v1.HookRequest) (*v1.HookResponse, error)
-	PendingSkips(context.Context, *v1.PendingSkipsRequest) (*v1.PendingSkipsResponse, error)
-	ConsumeSkips(context.Context, *v1.ConsumeSkipsRequest) (*v1.ConsumeSkipsResponse, error)
 	// 进程管理
 	Shutdown(context.Context, *v1.ShutdownRequest) (*v1.ShutdownResponse, error)
 }
@@ -345,8 +325,6 @@ type PairServiceHandler interface {
 	SetSessionState(context.Context, *v1.SetSessionStateRequest) (*v1.SetSessionStateResponse, error)
 	ListSessions(context.Context, *v1.ListSessionsRequest) (*v1.ListSessionsResponse, error)
 	Hook(context.Context, *v1.HookRequest) (*v1.HookResponse, error)
-	PendingSkips(context.Context, *v1.PendingSkipsRequest) (*v1.PendingSkipsResponse, error)
-	ConsumeSkips(context.Context, *v1.ConsumeSkipsRequest) (*v1.ConsumeSkipsResponse, error)
 	// 进程管理
 	Shutdown(context.Context, *v1.ShutdownRequest) (*v1.ShutdownResponse, error)
 }
@@ -379,8 +357,6 @@ func RegisterPairServiceHandler(server *connect.Server, svc PairServiceHandler) 
 		connect.Method{Spec: pairServiceSetSessionStateSpec(), Handler: adapter.setSessionState},
 		connect.Method{Spec: pairServiceListSessionsSpec(), Handler: adapter.listSessions},
 		connect.Method{Spec: pairServiceHookSpec(), Handler: adapter.hook},
-		connect.Method{Spec: pairServicePendingSkipsSpec(), Handler: adapter.pendingSkips},
-		connect.Method{Spec: pairServiceConsumeSkipsSpec(), Handler: adapter.consumeSkips},
 		connect.Method{Spec: pairServiceShutdownSpec(), Handler: adapter.shutdown},
 	)
 }
@@ -482,14 +458,6 @@ func (UnimplementedPairServiceHandler) ListSessions(context.Context, *v1.ListSes
 
 func (UnimplementedPairServiceHandler) Hook(context.Context, *v1.HookRequest) (*v1.HookResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "pair.v1.PairService.Hook is not implemented")
-}
-
-func (UnimplementedPairServiceHandler) PendingSkips(context.Context, *v1.PendingSkipsRequest) (*v1.PendingSkipsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "pair.v1.PairService.PendingSkips is not implemented")
-}
-
-func (UnimplementedPairServiceHandler) ConsumeSkips(context.Context, *v1.ConsumeSkipsRequest) (*v1.ConsumeSkipsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "pair.v1.PairService.ConsumeSkips is not implemented")
 }
 
 func (UnimplementedPairServiceHandler) Shutdown(context.Context, *v1.ShutdownRequest) (*v1.ShutdownResponse, error) {
@@ -687,22 +655,6 @@ func (c *pairServiceClient) ListSessions(ctx context.Context, req *v1.ListSessio
 func (c *pairServiceClient) Hook(ctx context.Context, req *v1.HookRequest) (*v1.HookResponse, error) {
 	var res v1.HookResponse
 	if err := c.client.CallUnary(ctx, pairServiceHookSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *pairServiceClient) PendingSkips(ctx context.Context, req *v1.PendingSkipsRequest) (*v1.PendingSkipsResponse, error) {
-	var res v1.PendingSkipsResponse
-	if err := c.client.CallUnary(ctx, pairServicePendingSkipsSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *pairServiceClient) ConsumeSkips(ctx context.Context, req *v1.ConsumeSkipsRequest) (*v1.ConsumeSkipsResponse, error) {
-	var res v1.ConsumeSkipsResponse
-	if err := c.client.CallUnary(ctx, pairServiceConsumeSkipsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1000,30 +952,6 @@ func (h pairServiceHandler) hook(ctx context.Context, _ connect.Spec, stream con
 		return err
 	}
 	res, err := h.svc.Hook(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h pairServiceHandler) pendingSkips(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.PendingSkipsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.PendingSkips(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h pairServiceHandler) consumeSkips(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.ConsumeSkipsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.ConsumeSkips(ctx, &req)
 	if err != nil {
 		return err
 	}

@@ -37,8 +37,6 @@ service PairService {
   rpc SetSessionState(SetSessionStateRequest) returns (SetSessionStateResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc Hook(HookRequest) returns (HookResponse);
-  rpc PendingSkips(PendingSkipsRequest) returns (PendingSkipsResponse);
-  rpc ConsumeSkips(ConsumeSkipsRequest) returns (ConsumeSkipsResponse);
 
   // 进程管理
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
@@ -467,6 +465,8 @@ message BindResponse {
   repeated string conflicts = 4;
   // 其他会话正在修改的区块等单向提示.
   repeated string notices = 5;
+  // 压成一行后记录的保持规格原因.
+  string preserve = 6;
 }
 
 message SkipUpdateRequest {
@@ -474,7 +474,10 @@ message SkipUpdateRequest {
   string reason = 2;
 }
 
-message SkipUpdateResponse {}
+message SkipUpdateResponse {
+  // 压成一行后登记的跳过原因, 即写入 Pair-Skip trailer 的内容.
+  string reason = 1;
+}
 
 message SetSessionStateRequest {
   string session_id = 1;
@@ -504,7 +507,7 @@ message ListSessionsResponse {
 }
 
 message HookRequest {
-  // session-start | prompt-submit | before-tool | after-tool | before-stop
+  // session-start | session-end | prompt-submit | before-tool | after-tool | before-stop
   string event = 1;
   // 宿主写入 stdin 的原始 JSON.
   bytes payload = 2;
@@ -518,16 +521,6 @@ message HookResponse {
   // 需要追加写入会话环境文件的内容.
   string env_file_append = 2;
 }
-
-message PendingSkipsRequest {}
-
-message PendingSkipsResponse {
-  repeated string reasons = 1;
-}
-
-message ConsumeSkipsRequest {}
-
-message ConsumeSkipsResponse {}
 
 message ShutdownRequest {}
 

@@ -3678,7 +3678,9 @@ type BindResponse struct {
 	// 与其他会话命中同一区块的冲突.
 	Conflicts []string `protobuf:"bytes,4,rep,name=conflicts,proto3" json:"conflicts,omitempty"`
 	// 其他会话正在修改的区块等单向提示.
-	Notices       []string `protobuf:"bytes,5,rep,name=notices,proto3" json:"notices,omitempty"`
+	Notices []string `protobuf:"bytes,5,rep,name=notices,proto3" json:"notices,omitempty"`
+	// 压成一行后记录的保持规格原因.
+	Preserve      string `protobuf:"bytes,6,opt,name=preserve,proto3" json:"preserve,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3748,6 +3750,13 @@ func (x *BindResponse) GetNotices() []string {
 	return nil
 }
 
+func (x *BindResponse) GetPreserve() string {
+	if x != nil {
+		return x.Preserve
+	}
+	return ""
+}
+
 type SkipUpdateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -3801,7 +3810,9 @@ func (x *SkipUpdateRequest) GetReason() string {
 }
 
 type SkipUpdateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 压成一行后登记的跳过原因, 即写入 Pair-Skip trailer 的内容.
+	Reason        string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3834,6 +3845,13 @@ func (x *SkipUpdateResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SkipUpdateResponse.ProtoReflect.Descriptor instead.
 func (*SkipUpdateResponse) Descriptor() ([]byte, []int) {
 	return file_pair_v1_pair_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *SkipUpdateResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
 }
 
 type SetSessionStateRequest struct {
@@ -4116,7 +4134,7 @@ func (x *ListSessionsResponse) GetSessions() []*Session {
 
 type HookRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// session-start | prompt-submit | before-tool | after-tool | before-stop
+	// session-start | session-end | prompt-submit | before-tool | after-tool | before-stop
 	Event string `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
 	// 宿主写入 stdin 的原始 JSON.
 	Payload []byte `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
@@ -4231,158 +4249,6 @@ func (x *HookResponse) GetEnvFileAppend() string {
 	return ""
 }
 
-type PendingSkipsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PendingSkipsRequest) Reset() {
-	*x = PendingSkipsRequest{}
-	mi := &file_pair_v1_pair_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PendingSkipsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PendingSkipsRequest) ProtoMessage() {}
-
-func (x *PendingSkipsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PendingSkipsRequest.ProtoReflect.Descriptor instead.
-func (*PendingSkipsRequest) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{62}
-}
-
-type PendingSkipsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reasons       []string               `protobuf:"bytes,1,rep,name=reasons,proto3" json:"reasons,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PendingSkipsResponse) Reset() {
-	*x = PendingSkipsResponse{}
-	mi := &file_pair_v1_pair_proto_msgTypes[63]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PendingSkipsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PendingSkipsResponse) ProtoMessage() {}
-
-func (x *PendingSkipsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[63]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PendingSkipsResponse.ProtoReflect.Descriptor instead.
-func (*PendingSkipsResponse) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{63}
-}
-
-func (x *PendingSkipsResponse) GetReasons() []string {
-	if x != nil {
-		return x.Reasons
-	}
-	return nil
-}
-
-type ConsumeSkipsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConsumeSkipsRequest) Reset() {
-	*x = ConsumeSkipsRequest{}
-	mi := &file_pair_v1_pair_proto_msgTypes[64]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConsumeSkipsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConsumeSkipsRequest) ProtoMessage() {}
-
-func (x *ConsumeSkipsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[64]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConsumeSkipsRequest.ProtoReflect.Descriptor instead.
-func (*ConsumeSkipsRequest) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{64}
-}
-
-type ConsumeSkipsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ConsumeSkipsResponse) Reset() {
-	*x = ConsumeSkipsResponse{}
-	mi := &file_pair_v1_pair_proto_msgTypes[65]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ConsumeSkipsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ConsumeSkipsResponse) ProtoMessage() {}
-
-func (x *ConsumeSkipsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[65]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ConsumeSkipsResponse.ProtoReflect.Descriptor instead.
-func (*ConsumeSkipsResponse) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{65}
-}
-
 type ShutdownRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -4391,7 +4257,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_pair_v1_pair_proto_msgTypes[66]
+	mi := &file_pair_v1_pair_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4403,7 +4269,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[66]
+	mi := &file_pair_v1_pair_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4416,7 +4282,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{66}
+	return file_pair_v1_pair_proto_rawDescGZIP(), []int{62}
 }
 
 type ShutdownResponse struct {
@@ -4427,7 +4293,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_pair_v1_pair_proto_msgTypes[67]
+	mi := &file_pair_v1_pair_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4439,7 +4305,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[67]
+	mi := &file_pair_v1_pair_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4452,7 +4318,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{67}
+	return file_pair_v1_pair_proto_rawDescGZIP(), []int{63}
 }
 
 // Event 经 SSE 以 JSON 推送, seq 同时作为 SSE 的 id.
@@ -4472,7 +4338,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_pair_v1_pair_proto_msgTypes[68]
+	mi := &file_pair_v1_pair_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4484,7 +4350,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_pair_v1_pair_proto_msgTypes[68]
+	mi := &file_pair_v1_pair_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4497,7 +4363,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_pair_v1_pair_proto_rawDescGZIP(), []int{68}
+	return file_pair_v1_pair_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *Event) GetSeq() int64 {
@@ -4807,19 +4673,21 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"\bBoundDoc\x12\x15\n" +
 	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x12\x1a\n" +
 	"\bsections\x18\x02 \x03(\tR\bsections\x12\x12\n" +
-	"\x04base\x18\x03 \x01(\tR\x04base\"\xa5\x01\n" +
+	"\x04base\x18\x03 \x01(\tR\x04base\"\xc1\x01\n" +
 	"\fBindResponse\x12\x17\n" +
 	"\abind_id\x18\x01 \x01(\tR\x06bindId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12%\n" +
 	"\x04docs\x18\x03 \x03(\v2\x11.pair.v1.BoundDocR\x04docs\x12\x1c\n" +
 	"\tconflicts\x18\x04 \x03(\tR\tconflicts\x12\x18\n" +
-	"\anotices\x18\x05 \x03(\tR\anotices\"J\n" +
+	"\anotices\x18\x05 \x03(\tR\anotices\x12\x1a\n" +
+	"\bpreserve\x18\x06 \x01(\tR\bpreserve\"J\n" +
 	"\x11SkipUpdateRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x14\n" +
-	"\x12SkipUpdateResponse\"q\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\",\n" +
+	"\x12SkipUpdateResponse\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"q\n" +
 	"\x16SetSessionStateRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
@@ -4848,12 +4716,7 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"\benv_file\x18\x03 \x01(\tR\aenvFile\"N\n" +
 	"\fHookResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\fR\x06output\x12&\n" +
-	"\x0fenv_file_append\x18\x02 \x01(\tR\renvFileAppend\"\x15\n" +
-	"\x13PendingSkipsRequest\"0\n" +
-	"\x14PendingSkipsResponse\x12\x18\n" +
-	"\areasons\x18\x01 \x03(\tR\areasons\"\x15\n" +
-	"\x13ConsumeSkipsRequest\"\x16\n" +
-	"\x14ConsumeSkipsResponse\"\x11\n" +
+	"\x0fenv_file_append\x18\x02 \x01(\tR\renvFileAppend\"\x11\n" +
 	"\x0fShutdownRequest\"\x12\n" +
 	"\x10ShutdownResponse\"\x9c\x01\n" +
 	"\x05Event\x12\x10\n" +
@@ -4896,7 +4759,7 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"\x15FEEDBACK_STATE_STAGED\x10\x01\x12\x1c\n" +
 	"\x18FEEDBACK_STATE_TRIGGERED\x10\x02\x12\x1a\n" +
 	"\x16FEEDBACK_STATE_DRAINED\x10\x03\x12\x1b\n" +
-	"\x17FEEDBACK_STATE_RESOLVED\x10\x042\xfa\r\n" +
+	"\x17FEEDBACK_STATE_RESOLVED\x10\x042\xe0\f\n" +
 	"\vPairService\x123\n" +
 	"\x04Ping\x12\x14.pair.v1.PingRequest\x1a\x15.pair.v1.PingResponse\x129\n" +
 	"\x06Status\x12\x16.pair.v1.StatusRequest\x1a\x17.pair.v1.StatusResponse\x12?\n" +
@@ -4922,9 +4785,7 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"SkipUpdate\x12\x1a.pair.v1.SkipUpdateRequest\x1a\x1b.pair.v1.SkipUpdateResponse\x12T\n" +
 	"\x0fSetSessionState\x12\x1f.pair.v1.SetSessionStateRequest\x1a .pair.v1.SetSessionStateResponse\x12K\n" +
 	"\fListSessions\x12\x1c.pair.v1.ListSessionsRequest\x1a\x1d.pair.v1.ListSessionsResponse\x123\n" +
-	"\x04Hook\x12\x14.pair.v1.HookRequest\x1a\x15.pair.v1.HookResponse\x12K\n" +
-	"\fPendingSkips\x12\x1c.pair.v1.PendingSkipsRequest\x1a\x1d.pair.v1.PendingSkipsResponse\x12K\n" +
-	"\fConsumeSkips\x12\x1c.pair.v1.ConsumeSkipsRequest\x1a\x1d.pair.v1.ConsumeSkipsResponse\x12?\n" +
+	"\x04Hook\x12\x14.pair.v1.HookRequest\x1a\x15.pair.v1.HookResponse\x12?\n" +
 	"\bShutdown\x12\x18.pair.v1.ShutdownRequest\x1a\x19.pair.v1.ShutdownResponseB2Z0github.com/FooFishes/pairwise/gen/pair/v1;pairv1b\x06proto3"
 
 var (
@@ -4940,7 +4801,7 @@ func file_pair_v1_pair_proto_rawDescGZIP() []byte {
 }
 
 var file_pair_v1_pair_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_pair_v1_pair_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
+var file_pair_v1_pair_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
 var file_pair_v1_pair_proto_goTypes = []any{
 	(DocKind)(0),                    // 0: pair.v1.DocKind
 	(SectionStatus)(0),              // 1: pair.v1.SectionStatus
@@ -5010,13 +4871,9 @@ var file_pair_v1_pair_proto_goTypes = []any{
 	(*ListSessionsResponse)(nil),    // 65: pair.v1.ListSessionsResponse
 	(*HookRequest)(nil),             // 66: pair.v1.HookRequest
 	(*HookResponse)(nil),            // 67: pair.v1.HookResponse
-	(*PendingSkipsRequest)(nil),     // 68: pair.v1.PendingSkipsRequest
-	(*PendingSkipsResponse)(nil),    // 69: pair.v1.PendingSkipsResponse
-	(*ConsumeSkipsRequest)(nil),     // 70: pair.v1.ConsumeSkipsRequest
-	(*ConsumeSkipsResponse)(nil),    // 71: pair.v1.ConsumeSkipsResponse
-	(*ShutdownRequest)(nil),         // 72: pair.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),        // 73: pair.v1.ShutdownResponse
-	(*Event)(nil),                   // 74: pair.v1.Event
+	(*ShutdownRequest)(nil),         // 68: pair.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),        // 69: pair.v1.ShutdownResponse
+	(*Event)(nil),                   // 70: pair.v1.Event
 }
 var file_pair_v1_pair_proto_depIdxs = []int32{
 	7,  // 0: pair.v1.LayoutNode.children:type_name -> pair.v1.LayoutNode
@@ -5086,38 +4943,34 @@ var file_pair_v1_pair_proto_depIdxs = []int32{
 	61, // 64: pair.v1.PairService.SetSessionState:input_type -> pair.v1.SetSessionStateRequest
 	64, // 65: pair.v1.PairService.ListSessions:input_type -> pair.v1.ListSessionsRequest
 	66, // 66: pair.v1.PairService.Hook:input_type -> pair.v1.HookRequest
-	68, // 67: pair.v1.PairService.PendingSkips:input_type -> pair.v1.PendingSkipsRequest
-	70, // 68: pair.v1.PairService.ConsumeSkips:input_type -> pair.v1.ConsumeSkipsRequest
-	72, // 69: pair.v1.PairService.Shutdown:input_type -> pair.v1.ShutdownRequest
-	18, // 70: pair.v1.PairService.Ping:output_type -> pair.v1.PingResponse
-	20, // 71: pair.v1.PairService.Status:output_type -> pair.v1.StatusResponse
-	22, // 72: pair.v1.PairService.ListDocs:output_type -> pair.v1.ListDocsResponse
-	24, // 73: pair.v1.PairService.GetDoc:output_type -> pair.v1.GetDocResponse
-	26, // 74: pair.v1.PairService.Show:output_type -> pair.v1.ShowResponse
-	29, // 75: pair.v1.PairService.Lookup:output_type -> pair.v1.LookupResponse
-	31, // 76: pair.v1.PairService.Check:output_type -> pair.v1.CheckResponse
-	33, // 77: pair.v1.PairService.SectionDiff:output_type -> pair.v1.SectionDiffResponse
-	35, // 78: pair.v1.PairService.Update:output_type -> pair.v1.UpdateResponse
-	37, // 79: pair.v1.PairService.Ask:output_type -> pair.v1.AskResponse
-	39, // 80: pair.v1.PairService.WaitDecision:output_type -> pair.v1.WaitDecisionResponse
-	41, // 81: pair.v1.PairService.Drain:output_type -> pair.v1.DrainResponse
-	43, // 82: pair.v1.PairService.StageDecide:output_type -> pair.v1.StageDecideResponse
-	45, // 83: pair.v1.PairService.StageNote:output_type -> pair.v1.StageNoteResponse
-	47, // 84: pair.v1.PairService.StageRemove:output_type -> pair.v1.StageRemoveResponse
-	49, // 85: pair.v1.PairService.ListFeedback:output_type -> pair.v1.ListFeedbackResponse
-	51, // 86: pair.v1.PairService.Confirm:output_type -> pair.v1.ConfirmResponse
-	53, // 87: pair.v1.PairService.AckRetracted:output_type -> pair.v1.AckRetractedResponse
-	55, // 88: pair.v1.PairService.Trigger:output_type -> pair.v1.TriggerResponse
-	58, // 89: pair.v1.PairService.Bind:output_type -> pair.v1.BindResponse
-	60, // 90: pair.v1.PairService.SkipUpdate:output_type -> pair.v1.SkipUpdateResponse
-	62, // 91: pair.v1.PairService.SetSessionState:output_type -> pair.v1.SetSessionStateResponse
-	65, // 92: pair.v1.PairService.ListSessions:output_type -> pair.v1.ListSessionsResponse
-	67, // 93: pair.v1.PairService.Hook:output_type -> pair.v1.HookResponse
-	69, // 94: pair.v1.PairService.PendingSkips:output_type -> pair.v1.PendingSkipsResponse
-	71, // 95: pair.v1.PairService.ConsumeSkips:output_type -> pair.v1.ConsumeSkipsResponse
-	73, // 96: pair.v1.PairService.Shutdown:output_type -> pair.v1.ShutdownResponse
-	70, // [70:97] is the sub-list for method output_type
-	43, // [43:70] is the sub-list for method input_type
+	68, // 67: pair.v1.PairService.Shutdown:input_type -> pair.v1.ShutdownRequest
+	18, // 68: pair.v1.PairService.Ping:output_type -> pair.v1.PingResponse
+	20, // 69: pair.v1.PairService.Status:output_type -> pair.v1.StatusResponse
+	22, // 70: pair.v1.PairService.ListDocs:output_type -> pair.v1.ListDocsResponse
+	24, // 71: pair.v1.PairService.GetDoc:output_type -> pair.v1.GetDocResponse
+	26, // 72: pair.v1.PairService.Show:output_type -> pair.v1.ShowResponse
+	29, // 73: pair.v1.PairService.Lookup:output_type -> pair.v1.LookupResponse
+	31, // 74: pair.v1.PairService.Check:output_type -> pair.v1.CheckResponse
+	33, // 75: pair.v1.PairService.SectionDiff:output_type -> pair.v1.SectionDiffResponse
+	35, // 76: pair.v1.PairService.Update:output_type -> pair.v1.UpdateResponse
+	37, // 77: pair.v1.PairService.Ask:output_type -> pair.v1.AskResponse
+	39, // 78: pair.v1.PairService.WaitDecision:output_type -> pair.v1.WaitDecisionResponse
+	41, // 79: pair.v1.PairService.Drain:output_type -> pair.v1.DrainResponse
+	43, // 80: pair.v1.PairService.StageDecide:output_type -> pair.v1.StageDecideResponse
+	45, // 81: pair.v1.PairService.StageNote:output_type -> pair.v1.StageNoteResponse
+	47, // 82: pair.v1.PairService.StageRemove:output_type -> pair.v1.StageRemoveResponse
+	49, // 83: pair.v1.PairService.ListFeedback:output_type -> pair.v1.ListFeedbackResponse
+	51, // 84: pair.v1.PairService.Confirm:output_type -> pair.v1.ConfirmResponse
+	53, // 85: pair.v1.PairService.AckRetracted:output_type -> pair.v1.AckRetractedResponse
+	55, // 86: pair.v1.PairService.Trigger:output_type -> pair.v1.TriggerResponse
+	58, // 87: pair.v1.PairService.Bind:output_type -> pair.v1.BindResponse
+	60, // 88: pair.v1.PairService.SkipUpdate:output_type -> pair.v1.SkipUpdateResponse
+	62, // 89: pair.v1.PairService.SetSessionState:output_type -> pair.v1.SetSessionStateResponse
+	65, // 90: pair.v1.PairService.ListSessions:output_type -> pair.v1.ListSessionsResponse
+	67, // 91: pair.v1.PairService.Hook:output_type -> pair.v1.HookResponse
+	69, // 92: pair.v1.PairService.Shutdown:output_type -> pair.v1.ShutdownResponse
+	68, // [68:93] is the sub-list for method output_type
+	43, // [43:68] is the sub-list for method input_type
 	43, // [43:43] is the sub-list for extension type_name
 	43, // [43:43] is the sub-list for extension extendee
 	0,  // [0:43] is the sub-list for field type_name
@@ -5134,7 +4987,7 @@ func file_pair_v1_pair_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pair_v1_pair_proto_rawDesc), len(file_pair_v1_pair_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   69,
+			NumMessages:   65,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
