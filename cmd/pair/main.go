@@ -5,8 +5,9 @@ import (
 	"os"
 
 	"github.com/FooFishes/pairwise/internal/cli"
+	"github.com/FooFishes/pairwise/internal/core"
 )
 
 func main() {
-	os.Exit(cli.Execute())
+	os.Exit(cli.Execute(core.New))
 }

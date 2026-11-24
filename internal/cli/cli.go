@@ -4,9 +4,12 @@ package cli
 
 import (
 	_ "github.com/spf13/cobra"
+
+	"github.com/FooFishes/pairwise/internal/daemon"
 )
 
-// Execute 运行命令行并返回退出码.
-func Execute() int {
+// Execute 运行命令行并返回退出码. newService 用于隐藏子命令 pair daemon 启动常驻进程,
+// 由 main 注入以免 cli 依赖 core.
+func Execute(newService daemon.NewService) int {
 	panic("TODO")
 }

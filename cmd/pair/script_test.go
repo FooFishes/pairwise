@@ -9,11 +9,12 @@ import (
 	"github.com/rogpeppe/go-internal/testscript"
 
 	"github.com/FooFishes/pairwise/internal/cli"
+	"github.com/FooFishes/pairwise/internal/core"
 )
 
 func TestMain(m *testing.M) {
 	testscript.Main(m, map[string]func(){
-		"pair": func() { os.Exit(cli.Execute()) },
+		"pair": func() { os.Exit(cli.Execute(core.New)) },
 	})
 }
 
