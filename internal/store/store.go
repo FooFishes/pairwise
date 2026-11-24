@@ -161,6 +161,10 @@ func (s *Store) writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	// 快照目录只是缓存, 运行期间可能被手动清理.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	return os.Rename(f.Name(), path)
 }
 
@@ -315,10 +319,15 @@ func (s *Store) SetProgress(branch, decisionID, target, status, reason string) e
 	})
 }
 
-// Progress 返回问题最新条目已记录的 target 进度.
+// Progress 返回问题未闭环条目已记录的 target 进度; 已闭环的是上一轮问题的进度, 不计入.
 func (s *Store) Progress(branch, decisionID string) ([]*pairv1.TargetProgress, error) {
-	f, err := s.Feedback(branch, decisionID)
-	return f.GetProgress(), err
+	var progress []*pairv1.TargetProgress
+	err := s.db.QueryRow(`SELECT progress FROM feedback WHERE branch = ? AND id = ? AND state <> ?`,
+		branch, decisionID, resolved).Scan(jsonCol{&progress})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return progress, err
 }
 
 // transit 更新满足 cond 的条目, 按创建顺序返回更新后的条目. RETURNING 的行序不确定, 因此按序号回查.
