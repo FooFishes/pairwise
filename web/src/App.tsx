@@ -1,122 +1,50 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useMemo, useState } from "react"
 
-function App() {
-  const [count, setCount] = useState(0)
+import { DocView, type Filters } from "@/components/doc-view"
+import { Inspector } from "@/components/inspector"
+import { Sidebar } from "@/components/sidebar"
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { DocKind } from "@/gen/pair/v1/pair_pb"
+import { NavContext, useHashRoute } from "@/lib/nav"
+import { useDocs, useEvents, useFeedback } from "@/lib/queries"
+import { errorText, kindName } from "@/lib/rpc"
+
+export default function App() {
+  const connected = useEvents()
+  const [route, go] = useHashRoute()
+  const docs = useDocs()
+  const feedback = useFeedback()
+  const [filters, setFilters] = useState<Filters>({ review: false, workaround: false })
+
+  // 首次打开且地址未指定文档时, 打开分组顺序中的第一篇.
+  useEffect(() => {
+    if (route || !docs.data) return
+    const first = [DocKind.MODULE, DocKind.FLOW, DocKind.DECISION]
+      .map((k) => docs.data.find((d) => d.kind === k))
+      .find(Boolean)
+    if (first) go({ kind: kindName(first.kind), id: first.id }, true)
+  }, [route, docs.data, go])
+
+  const nav = useMemo(() => ({ route, go, docs: docs.data ?? [] }), [route, go, docs.data])
+  const items = feedback.data ?? []
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    <NavContext value={nav}>
+      <div className="grid h-dvh min-w-[60rem] grid-cols-[15.5rem_minmax(0,1fr)_18rem] overflow-hidden">
+        <Sidebar filters={filters} setFilters={setFilters} feedback={items} connected={connected} />
+        <main className="flex min-h-0 min-w-0 flex-col">
+          {route ? (
+            <DocView key={`${route.kind}/${route.id}`} route={route} filters={filters} feedback={items} />
+          ) : (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>{docs.isError ? errorText(docs.error) : docs.data?.length === 0 && "还没有文档"}</EmptyTitle>
+              </EmptyHeader>
+            </Empty>
+          )}
+        </main>
+        <Inspector feedback={items} />
+      </div>
+    </NavContext>
   )
 }
-
-export default App

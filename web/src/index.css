@@ -1,111 +1,206 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@theme inline {
+    --font-sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-heading: var(--font-sans);
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --color-unconfirmed: var(--unconfirmed);
+    --color-changed: var(--changed);
+    --color-confirmed: var(--confirmed);
+    --color-retracted: var(--retracted);
+    --color-inserted: var(--inserted);
+    --color-removed: var(--removed);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+    color-scheme: light dark;
+    --radius: 0.5rem;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.22 0.012 260);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.22 0.012 260);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.22 0.012 260);
+    --primary: oklch(0.42 0.085 258);
+    --primary-foreground: oklch(0.985 0.003 250);
+    --secondary: oklch(0.96 0.004 255);
+    --secondary-foreground: oklch(0.26 0.012 260);
+    --muted: oklch(0.965 0.004 255);
+    --muted-foreground: oklch(0.52 0.012 258);
+    --accent: oklch(0.95 0.008 255);
+    --accent-foreground: oklch(0.22 0.012 260);
+    --destructive: oklch(0.56 0.2 25);
+    --border: oklch(0.915 0.005 258);
+    --input: oklch(0.89 0.006 258);
+    --ring: oklch(0.55 0.08 258);
+    --sidebar: oklch(0.972 0.004 255);
+    --sidebar-foreground: oklch(0.22 0.012 260);
+    --sidebar-primary: oklch(0.42 0.085 258);
+    --sidebar-primary-foreground: oklch(0.985 0.003 250);
+    --sidebar-accent: oklch(0.925 0.01 255);
+    --sidebar-accent-foreground: oklch(0.2 0.012 260);
+    --sidebar-border: oklch(0.91 0.005 258);
+    --sidebar-ring: oklch(0.55 0.08 258);
+    --unconfirmed: oklch(0.6 0.13 65);
+    --changed: oklch(0.5 0.15 285);
+    --confirmed: oklch(0.52 0.1 155);
+    --retracted: oklch(0.55 0.17 20);
+    --inserted: oklch(0.88 0.09 155);
+    --removed: oklch(0.9 0.06 20);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+    :root {
+        --background: oklch(0.205 0.006 260);
+        --foreground: oklch(0.94 0.004 255);
+        --card: oklch(0.225 0.007 260);
+        --card-foreground: oklch(0.94 0.004 255);
+        --popover: oklch(0.25 0.008 260);
+        --popover-foreground: oklch(0.94 0.004 255);
+        --primary: oklch(0.6 0.11 256);
+        --primary-foreground: oklch(0.985 0.002 250);
+        --secondary: oklch(0.27 0.008 260);
+        --secondary-foreground: oklch(0.94 0.004 255);
+        --muted: oklch(0.255 0.007 260);
+        --muted-foreground: oklch(0.68 0.01 258);
+        --accent: oklch(0.29 0.01 260);
+        --accent-foreground: oklch(0.94 0.004 255);
+        --destructive: oklch(0.7 0.17 22);
+        --border: oklch(1 0 0 / 9%);
+        --input: oklch(1 0 0 / 14%);
+        --ring: oklch(0.6 0.1 256);
+        --sidebar: oklch(0.18 0.006 260);
+        --sidebar-foreground: oklch(0.94 0.004 255);
+        --sidebar-primary: oklch(0.6 0.11 256);
+        --sidebar-primary-foreground: oklch(0.985 0.002 250);
+        --sidebar-accent: oklch(0.29 0.012 258);
+        --sidebar-accent-foreground: oklch(0.96 0.004 255);
+        --sidebar-border: oklch(1 0 0 / 8%);
+        --sidebar-ring: oklch(0.6 0.1 256);
+        --unconfirmed: oklch(0.8 0.12 75);
+        --changed: oklch(0.76 0.12 285);
+        --confirmed: oklch(0.76 0.11 155);
+        --retracted: oklch(0.73 0.14 20);
+        --inserted: oklch(0.5 0.1 155 / 45%);
+        --removed: oklch(0.5 0.13 20 / 45%);
+    }
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    html {
+        @apply font-sans antialiased;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
 }
 
-body {
-  margin: 0;
+/* 区块正文的 Markdown 排版, 字号与界面一致只分两级. */
+@layer components {
+    .md {
+        @apply text-[13px] leading-relaxed;
+
+        & > * + * {
+            @apply mt-2.5;
+        }
+        & h1, & h2, & h3, & h4, & h5, & h6 {
+            @apply text-[13px] font-semibold;
+        }
+        & :is(h1, h2, h3, h4, h5, h6) + * {
+            @apply mt-1.5;
+        }
+        & * + :is(h1, h2, h3, h4, h5, h6) {
+            @apply mt-4;
+        }
+        & a {
+            @apply text-primary underline-offset-2 hover:underline;
+        }
+        & ul {
+            @apply list-disc pl-5;
+        }
+        & ol {
+            @apply list-decimal pl-5;
+        }
+        & li + li, & li > ul, & li > ol {
+            @apply mt-1;
+        }
+        & li::marker {
+            @apply text-muted-foreground;
+        }
+        & blockquote {
+            @apply border-l-2 pl-3 text-muted-foreground;
+        }
+        & code {
+            @apply rounded-sm bg-muted px-1 py-px font-mono text-[12px];
+        }
+        & pre {
+            @apply overflow-x-auto rounded-md bg-muted px-3 py-2 text-[12px] leading-normal;
+
+            & code {
+                @apply bg-transparent p-0;
+            }
+        }
+        & table {
+            @apply block w-max max-w-full overflow-x-auto border-collapse text-[12px];
+        }
+        & th, & td {
+            @apply border px-2 py-1 text-left align-top;
+        }
+        & th {
+            @apply bg-muted font-medium;
+        }
+        & hr {
+            @apply border-border;
+        }
+        & strong {
+            @apply font-semibold;
+        }
+    }
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
+/* Mermaid 画布中与本文档区块同名、可点击跳转的节点. */
+.mermaid-canvas .pw-link {
+    cursor: pointer;
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+    &:hover :is(rect, polygon, circle, ellipse, path) {
+        stroke: var(--primary) !important;
+    }
 }
