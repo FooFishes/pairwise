@@ -41,10 +41,11 @@ internal/cli/        cobra 命令与面向模型的文本输出
 internal/hook/       宿主 Hook 输入输出适配（Claude Code JSON）
 web/                 React + Vite 工作台；web/embed.go 通过 embed 打包 web/dist
 plugin/claude-code/  Claude Code 插件：hooks.json 与 SKILL.md
+scripts/             需要真实宿主的手动验收脚本
 testdata/script/     testscript 端到端用例
 ```
 
-依赖方向：`cli → client → gen`；`daemon → core → {doc, merge, repo, store, check, gitx}`；`check → {doc, repo, gitx}`；`merge → doc`。`cli` 不直接依赖 `core`，只有 `init`、`check`、`merge-driver`、`git-hook` 这类必须脱离常驻进程运行的命令直接调用 `check / merge / repo / store`。`core → hook`：`internal/hook` 只做宿主 JSON 的解析与渲染，不含业务判断。
+依赖方向：`cli → client → gen`；`daemon → core → {doc, merge, repo, store, check, gitx}`；`check → {doc, repo, gitx}`；`merge → doc`。`cli` 不直接依赖 `core`，只有 `init`、`check`、`merge-driver`、`git-hook` 这类必须脱离常驻进程运行的命令直接调用 `check / merge / repo / store`。`core → hook`、`cli → hook`：`internal/hook` 只做宿主 JSON 的解析与渲染，不含业务判断；`cli` 只用它取事件名与输入中的工作目录。
 
 ## 4. 补充约定
 

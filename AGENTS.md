@@ -39,6 +39,7 @@
 
 - 端到端用例在 `testdata/script/*.txtar`，用 testscript 在临时 Git 仓库中跑真实二进制；`cmd/pair/script_test.go` 提供 `grab`、`http`、`poll`、`sleep` 等自定义命令。
 - 不用 Mock：需要 Git、文件系统或常驻进程的地方都用真实的。
+- 改动 Hook 或插件后，在已登录 Claude Code 的环境中运行 `scripts/accept-claude.sh`，用真实的 `claude -p` 会话验收会话身份、`.pair/` 写保护、绑定提示与回合结束拦截。
 - 纯逻辑（合并、区块切分）配表驱动单元测试；用例宁少勿碎，只钉住重要行为。
 
 ## 本地调试
