@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "pair hook session-start" }] }
+    ],
+    "CwdChanged": [
+      { "hooks": [{ "type": "command", "command": "pair hook session-start" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "pair hook prompt-submit" }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "pair hook before-tool" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "pair hook after-tool" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "pair hook before-stop" }] }
+    ]
+  }
+}

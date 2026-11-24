@@ -1,0 +1,14 @@
+{
+  "name": "pairwise",
+  "description": "Pairwise 插件市场",
+  "owner": {
+    "name": "FooFishes"
+  },
+  "plugins": [
+    {
+      "name": "pair",
+      "source": "./plugin/claude-code",
+      "description": "Pairwise 的 Claude Code 接入: 生命周期 Hook 与使用指引"
+    }
+  ]
+}

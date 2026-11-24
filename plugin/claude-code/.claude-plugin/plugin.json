@@ -1,0 +1,9 @@
+{
+  "name": "pair",
+  "description": "Pairwise 的 Claude Code 接入: 生命周期 Hook 与使用指引, 让文档跟随代码实时演进",
+  "version": "0.1.0",
+  "author": {
+    "name": "FooFishes"
+  },
+  "homepage": "https://github.com/FooFishes/pairwise"
+}
