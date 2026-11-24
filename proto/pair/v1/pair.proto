@@ -1,0 +1,542 @@
+syntax = "proto3";
+
+package pair.v1;
+
+option go_package = "github.com/FooFishes/pairwise/gen/pair/v1;pairv1";
+
+// PairService 是常驻进程对 CLI 与界面提供的唯一接口.
+service PairService {
+  // 工作区与文档
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc ListDocs(ListDocsRequest) returns (ListDocsResponse);
+  rpc GetDoc(GetDocRequest) returns (GetDocResponse);
+  rpc Show(ShowRequest) returns (ShowResponse);
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+  rpc Check(CheckRequest) returns (CheckResponse);
+  rpc SectionDiff(SectionDiffRequest) returns (SectionDiffResponse);
+
+  // Agent 协作
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+  rpc Ask(AskRequest) returns (AskResponse);
+  rpc WaitDecision(WaitDecisionRequest) returns (WaitDecisionResponse);
+  rpc Drain(DrainRequest) returns (DrainResponse);
+
+  // 开发者决策与反馈
+  rpc StageDecide(StageDecideRequest) returns (StageDecideResponse);
+  rpc StageNote(StageNoteRequest) returns (StageNoteResponse);
+  rpc StageRemove(StageRemoveRequest) returns (StageRemoveResponse);
+  rpc ListFeedback(ListFeedbackRequest) returns (ListFeedbackResponse);
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+  rpc AckRetracted(AckRetractedRequest) returns (AckRetractedResponse);
+  rpc Trigger(TriggerRequest) returns (TriggerResponse);
+
+  // 会话、宿主 Hook 与 Git 钩子
+  rpc Bind(BindRequest) returns (BindResponse);
+  rpc SkipUpdate(SkipUpdateRequest) returns (SkipUpdateResponse);
+  rpc SetSessionState(SetSessionStateRequest) returns (SetSessionStateResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc Hook(HookRequest) returns (HookResponse);
+  rpc PendingSkips(PendingSkipsRequest) returns (PendingSkipsResponse);
+  rpc ConsumeSkips(ConsumeSkipsRequest) returns (ConsumeSkipsResponse);
+
+  // 进程管理
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+// ---------- 文档模型 ----------
+
+enum DocKind {
+  DOC_KIND_UNSPECIFIED = 0;
+  DOC_KIND_MODULE = 1;
+  DOC_KIND_FLOW = 2;
+  DOC_KIND_DECISION = 3;
+}
+
+enum SectionStatus {
+  SECTION_STATUS_UNSPECIFIED = 0;
+  // 无 confirmed_hash.
+  SECTION_STATUS_UNCONFIRMED = 1;
+  // confirmed_hash 与当前哈希一致.
+  SECTION_STATUS_CONFIRMED = 2;
+  // 已确认区块含未审阅改动.
+  SECTION_STATUS_CHANGED = 3;
+}
+
+enum BlockKind {
+  BLOCK_KIND_UNSPECIFIED = 0;
+  BLOCK_KIND_MARKDOWN = 1;
+  BLOCK_KIND_MERMAID = 2;
+  BLOCK_KIND_LAYOUT = 3;
+  BLOCK_KIND_COMPARE = 4;
+  BLOCK_KIND_SCENARIOS = 5;
+  BLOCK_KIND_WORKAROUND = 6;
+}
+
+message Assumption {
+  string id = 1;
+  string text = 2;
+}
+
+// LayoutNode 是 pw-layout 缩进树的一个节点.
+message LayoutNode {
+  string label = 1;
+  repeated LayoutNode children = 2;
+}
+
+// BlockItem 是 pw:compare 的方案或 pw:scenarios 的场景.
+message BlockItem {
+  string id = 1;
+  string title = 2;
+  string markdown = 3;
+  repeated Block blocks = 4;
+}
+
+// Block 是区块正文按预设组件切分后的一段.
+message Block {
+  BlockKind kind = 1;
+  // MARKDOWN 的原文, 容器类为容器内完整原文.
+  string markdown = 2;
+  // MERMAID 与 LAYOUT 的代码块源码.
+  string code = 3;
+  repeated LayoutNode layout = 4;
+  // 容器 ID.
+  string id = 5;
+  repeated BlockItem items = 6;
+  // WORKAROUND 的解除条件.
+  string condition = 7;
+}
+
+message Section {
+  string id = 1;
+  string title = 2;
+  string hash = 3;
+  string confirmed_hash = 4;
+  SectionStatus status = 5;
+  repeated Assumption assumptions = 6;
+  repeated Assumption retracted = 7;
+  // 不含标题行的正文.
+  string markdown = 8;
+  repeated Block blocks = 9;
+  // 正文中的 @doc#sec 引用.
+  repeated string refs = 10;
+  int32 line = 11;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_ERROR = 1;
+  SEVERITY_WARNING = 2;
+}
+
+message Diagnostic {
+  Severity severity = 1;
+  string path = 2;
+  int32 line = 3;
+  string code = 4;
+  string message = 5;
+  // 可直接执行的修复指引.
+  string fix = 6;
+}
+
+message DocSummary {
+  string id = 1;
+  DocKind kind = 2;
+  string path = 3;
+  string title = 4;
+  int32 section_count = 5;
+  int32 unconfirmed_count = 6;
+  int32 changed_count = 7;
+  int32 assumption_count = 8;
+  int32 retracted_count = 9;
+  int32 workaround_count = 10;
+}
+
+// TargetProgress 是待确认问题某个 target 的闭环进度.
+message TargetProgress {
+  string target = 1;
+  // pending | updated | no_change
+  string status = 2;
+  string reason = 3;
+}
+
+message Decision {
+  repeated string targets = 1;
+  string default_option = 2;
+  // 首个 pw:compare 容器的方案.
+  repeated BlockItem options = 3;
+  repeated TargetProgress progress = 4;
+}
+
+message Doc {
+  string id = 1;
+  DocKind kind = 2;
+  string path = 3;
+  string title = 4;
+  // 当前整文件 base 哈希.
+  string base = 5;
+  repeated string scope = 6;
+  string preamble_markdown = 7;
+  repeated Block preamble_blocks = 8;
+  repeated Section sections = 9;
+  // flow 正文引用推导出的关联文档.
+  repeated string refs = 10;
+  Decision decision = 11;
+  repeated Diagnostic diagnostics = 12;
+  string raw = 13;
+}
+
+// ---------- 反馈 ----------
+
+enum FeedbackKind {
+  FEEDBACK_KIND_UNSPECIFIED = 0;
+  FEEDBACK_KIND_DECISION = 1;
+  FEEDBACK_KIND_NOTE = 2;
+}
+
+enum FeedbackState {
+  FEEDBACK_STATE_UNSPECIFIED = 0;
+  FEEDBACK_STATE_STAGED = 1;
+  FEEDBACK_STATE_TRIGGERED = 2;
+  FEEDBACK_STATE_DRAINED = 3;
+  FEEDBACK_STATE_RESOLVED = 4;
+}
+
+message Feedback {
+  // decision ID 或 fb-<n>.
+  string id = 1;
+  FeedbackKind kind = 2;
+  FeedbackState state = 3;
+  string branch = 4;
+  // DECISION: 所选方案及其标题.
+  string pick = 5;
+  string pick_title = 6;
+  // 附带的说明.
+  string note = 7;
+  // NOTE: 目标区块 doc#sec 与可选的假设.
+  string target = 8;
+  string assumption_id = 9;
+  string assumption_text = 10;
+  // DECISION: 受影响目标与闭环进度.
+  repeated string targets = 11;
+  repeated TargetProgress progress = 12;
+  bool steer = 13;
+  string drained_by = 14;
+  int64 created_at = 15;
+  int64 triggered_at = 16;
+  int64 drained_at = 17;
+  int64 resolved_at = 18;
+}
+
+// ---------- 请求与响应 ----------
+
+message PingRequest {}
+
+message PingResponse {
+  string version = 1;
+  string fingerprint = 2;
+  string root = 3;
+  string branch = 4;
+  int32 pid = 5;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string root = 1;
+  string branch = 2;
+  repeated DocSummary docs = 3;
+  int32 staged = 4;
+  int32 triggered = 5;
+  int32 drained = 6;
+  int32 error_count = 7;
+  int32 warning_count = 8;
+  string ui_url = 9;
+}
+
+message ListDocsRequest {
+  DocKind kind = 1;
+}
+
+message ListDocsResponse {
+  repeated DocSummary docs = 1;
+}
+
+message GetDocRequest {
+  string id = 1;
+  DocKind kind = 2;
+}
+
+message GetDocResponse {
+  Doc doc = 1;
+}
+
+message ShowRequest {
+  // doc 或 doc#sec, 也可以是 decision ID.
+  string target = 1;
+  string session_id = 2;
+}
+
+message ShowResponse {
+  Doc doc = 1;
+  string section_id = 2;
+  // 所请求范围的原文.
+  string content = 3;
+  string base = 4;
+}
+
+message LookupRequest {
+  repeated string paths = 1;
+}
+
+message LookupResult {
+  string path = 1;
+  repeated DocSummary docs = 2;
+  bool ignored = 3;
+}
+
+message LookupResponse {
+  repeated LookupResult results = 1;
+}
+
+message CheckRequest {
+  bool strict = 1;
+}
+
+message CheckResponse {
+  repeated Diagnostic diagnostics = 1;
+}
+
+message SectionDiffRequest {
+  // doc#sec
+  string target = 1;
+}
+
+message SectionDiffResponse {
+  bool available = 1;
+  string confirmed = 2;
+  string current = 3;
+  string reason = 4;
+}
+
+message UpdateRequest {
+  // doc 或 doc#sec.
+  string target = 1;
+  string content = 2;
+  string base = 3;
+  repeated string resolves = 4;
+  // 非空时为 --no-change 结案, 不写正文.
+  string no_change = 5;
+  // module | flow, 仅新建时生效.
+  string kind = 6;
+  string session_id = 7;
+}
+
+message UpdateResponse {
+  string doc_id = 1;
+  string path = 2;
+  string base = 3;
+  bool created = 4;
+  bool changed = 5;
+  string diff = 6;
+  repeated string resolved = 7;
+  repeated string deleted_decisions = 8;
+  repeated string removed_assumptions = 9;
+  repeated Assumption retracted = 10;
+  repeated Feedback open_decisions = 11;
+}
+
+message AskRequest {
+  string id = 1;
+  string content = 2;
+  string session_id = 3;
+}
+
+message AskResponse {
+  string id = 1;
+  string path = 2;
+  bool replaced = 3;
+  Decision decision = 4;
+  string ui_url = 5;
+}
+
+message WaitDecisionRequest {
+  string id = 1;
+  // 0 时取 config.toml 的 ask_wait_timeout_secs.
+  int32 timeout_secs = 2;
+  string session_id = 3;
+}
+
+message WaitDecisionResponse {
+  bool decided = 1;
+  Feedback feedback = 2;
+  string default_option = 3;
+  int32 timeout_secs = 4;
+}
+
+message DrainRequest {
+  string session_id = 1;
+}
+
+message DrainResponse {
+  repeated Feedback items = 1;
+}
+
+message StageDecideRequest {
+  string decision_id = 1;
+  string pick = 2;
+  string note = 3;
+}
+
+message StageDecideResponse {
+  Feedback item = 1;
+}
+
+message StageNoteRequest {
+  // doc#sec
+  string target = 1;
+  string assumption_id = 2;
+  string message = 3;
+}
+
+message StageNoteResponse {
+  Feedback item = 1;
+}
+
+message StageRemoveRequest {
+  string id = 1;
+}
+
+message StageRemoveResponse {}
+
+message ListFeedbackRequest {
+  // 为空时返回当前分支全部未闭环条目.
+  repeated FeedbackState states = 1;
+}
+
+message ListFeedbackResponse {
+  repeated Feedback items = 1;
+}
+
+message ConfirmRequest {
+  // doc 或 doc#sec.
+  string target = 1;
+}
+
+message ConfirmResponse {
+  string doc_id = 1;
+  repeated string sections = 2;
+  string base = 3;
+}
+
+message AckRetractedRequest {
+  // doc#sec
+  string target = 1;
+  string assumption_id = 2;
+}
+
+message AckRetractedResponse {}
+
+message TriggerRequest {
+  bool steer = 1;
+}
+
+message TriggerResponse {
+  repeated Feedback items = 1;
+}
+
+message BindRequest {
+  repeated string targets = 1;
+  string session_id = 2;
+  string preserve = 3;
+}
+
+message BoundDoc {
+  string doc_id = 1;
+  repeated string sections = 2;
+  string base = 3;
+}
+
+message BindResponse {
+  string bind_id = 1;
+  string session_id = 2;
+  repeated BoundDoc docs = 3;
+  // 与其他会话命中同一区块的冲突.
+  repeated string conflicts = 4;
+  // 其他会话正在修改的区块等单向提示.
+  repeated string notices = 5;
+}
+
+message SkipUpdateRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message SkipUpdateResponse {}
+
+message SetSessionStateRequest {
+  string session_id = 1;
+  // idle | running | waiting
+  string state = 2;
+  repeated string capabilities = 3;
+}
+
+message SetSessionStateResponse {}
+
+message Session {
+  string id = 1;
+  string short_code = 2;
+  string state = 3;
+  repeated string capabilities = 4;
+  repeated BoundDoc bindings = 5;
+  string preserve = 6;
+  int64 updated_at = 7;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message HookRequest {
+  // session-start | prompt-submit | before-tool | after-tool | before-stop
+  string event = 1;
+  // 宿主写入 stdin 的原始 JSON.
+  bytes payload = 2;
+  // 宿主提供的会话环境文件路径, 如 CLAUDE_ENV_FILE.
+  string env_file = 3;
+}
+
+message HookResponse {
+  // 写到 stdout 的宿主 JSON, 为空时不输出.
+  bytes output = 1;
+  // 需要追加写入会话环境文件的内容.
+  string env_file_append = 2;
+}
+
+message PendingSkipsRequest {}
+
+message PendingSkipsResponse {
+  repeated string reasons = 1;
+}
+
+message ConsumeSkipsRequest {}
+
+message ConsumeSkipsResponse {}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
+
+// Event 经 SSE 以 JSON 推送, seq 同时作为 SSE 的 id.
+message Event {
+  int64 seq = 1;
+  // doc_changed | branch_changed | stage_changed | trigger | drained | resolved | decision_closed | session_changed
+  string type = 2;
+  int64 at = 3;
+  string branch = 4;
+  repeated string ids = 5;
+  bool steer = 6;
+  string session_id = 7;
+}
