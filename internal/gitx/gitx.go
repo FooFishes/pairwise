@@ -199,7 +199,7 @@ func Trailers(message, key string) []string {
 			others++
 		}
 	}
-	if others > 0 && !(generated && len(ts)*3 >= others) {
+	if others > 0 && (!generated || len(ts)*3 < others) {
 		return nil
 	}
 

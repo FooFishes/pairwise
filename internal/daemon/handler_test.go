@@ -80,8 +80,8 @@ func serve(t *testing.T, svc Service) (string, *http.Client) {
 	}
 	port := tcp.Addr().(*net.TCPAddr).Port
 	srv := &http.Server{Handler: newHandler(svc, port)}
-	go srv.Serve(tcp)
-	go srv.Serve(unix)
+	go func() { _ = srv.Serve(tcp) }()
+	go func() { _ = srv.Serve(unix) }()
 	t.Cleanup(func() { srv.Close() })
 	return fmt.Sprintf("http://127.0.0.1:%d", port), unixClient(sock)
 }

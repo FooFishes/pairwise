@@ -99,8 +99,7 @@ func (s *Store) tx(fn func(*sql.Tx) error) error {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
 }

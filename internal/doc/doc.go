@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -318,7 +319,7 @@ func FileHash(raw []byte) string {
 func ParseFront(text []byte) (*Front, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(text, &root); err != nil {
-		return nil, fmt.Errorf("Frontmatter 不是合法的 YAML: %w", err)
+		return nil, fmt.Errorf("文档的 Frontmatter 不是合法的 YAML: %w", err)
 	}
 	f := &Front{Node: &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}}
 	if root.Kind == yaml.DocumentNode {
@@ -328,7 +329,7 @@ func ParseFront(text []byte) (*Front, error) {
 		}
 	}
 	if f.Node.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("Frontmatter 必须是 YAML 映射")
+		return nil, errors.New("文档的 Frontmatter 必须是 YAML 映射")
 	}
 	var v struct {
 		ID            string                  `yaml:"id"`
@@ -338,7 +339,7 @@ func ParseFront(text []byte) (*Front, error) {
 		Sections      map[string]*SectionMeta `yaml:"sections"`
 	}
 	if err := f.Node.Decode(&v); err != nil {
-		return nil, fmt.Errorf("Frontmatter 字段类型不正确: %w", err)
+		return nil, fmt.Errorf("文档的 Frontmatter 字段类型不正确: %w", err)
 	}
 	f.ID, f.Scope, f.Targets, f.DefaultOption, f.Sections = v.ID, v.Scope, v.Targets, v.DefaultOption, v.Sections
 	if i := mapIndex(f.Node, "sections"); i >= 0 {

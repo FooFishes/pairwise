@@ -124,7 +124,7 @@ func (g *guard) issue(w http.ResponseWriter, _ *http.Request) {
 	g.tokens[token] = time.Now()
 	g.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"url": fmt.Sprintf("http://127.0.0.1:%d/?token=%s", g.port, token),
 	})
 }

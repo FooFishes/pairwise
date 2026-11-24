@@ -196,7 +196,8 @@ func (c *Client) spawn(ctx context.Context) error {
 	}
 	exited := make(chan struct{})
 	go func() {
-		cmd.Wait()
+		// 退出原因写在日志里, 启动失败时随日志末尾一起报告.
+		_ = cmd.Wait()
 		close(exited)
 	}()
 
@@ -225,7 +226,7 @@ func (c *Client) locked() bool {
 	lock := flock.New(daemon.LockPath(c.stateDir))
 	ok, err := lock.TryLock()
 	if ok {
-		lock.Unlock()
+		_ = lock.Unlock()
 	}
 	return !ok && err == nil
 }

@@ -23,7 +23,7 @@ func splitFront(raw []byte) (text []byte, end int, err error) {
 		}
 		i = next
 	}
-	return nil, 0, errors.New("Frontmatter 缺少结束分隔线 ---")
+	return nil, 0, errors.New("文档的 Frontmatter 缺少结束分隔线 ---")
 }
 
 // nextLine 返回从 i 开始的一行 (不含换行符) 与下一行的起点.

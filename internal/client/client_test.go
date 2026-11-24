@@ -43,7 +43,7 @@ func TestEventsReconnect(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, ": ping\n\nid: %d\ndata: {\"seq\":\"%d\"}\n\n", seq+1, seq+1)
 	})}
-	go srv.Serve(ln)
+	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())

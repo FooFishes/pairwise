@@ -154,7 +154,7 @@ func Run(ctx context.Context, dir string, newService NewService) error {
 		return errors.New("常驻进程已在运行")
 	}
 	// 释放锁放在最后: 锁一旦释放就可能有新实例启动, 此前必须已关闭业务实现.
-	defer lock.Unlock()
+	defer func() { _ = lock.Unlock() }()
 	// 崩溃残留的运行信息指向已失效的 pid 与 socket, 拿到锁后立即清除.
 	if err := os.Remove(InfoPath(stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
