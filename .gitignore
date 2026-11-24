@@ -1,0 +1,8 @@
+.DS_Store
+/dist/
+/bin/
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+*.test
+coverage.out
