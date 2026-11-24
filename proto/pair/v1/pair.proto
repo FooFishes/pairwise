@@ -493,6 +493,8 @@ message Session {
   repeated BoundDoc bindings = 5;
   string preserve = 6;
   int64 updated_at = 7;
+  // before-stop 同一原因第二次放行时仍未解决的拦截原因, 工作台标记为待核对; 新回合开始时清空.
+  string unverified = 8;
 }
 
 message ListSessionsRequest {}

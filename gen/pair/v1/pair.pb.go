@@ -3934,14 +3934,16 @@ func (*SetSessionStateResponse) Descriptor() ([]byte, []int) {
 }
 
 type Session struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ShortCode     string                 `protobuf:"bytes,2,opt,name=short_code,json=shortCode,proto3" json:"short_code,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Capabilities  []string               `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	Bindings      []*BoundDoc            `protobuf:"bytes,5,rep,name=bindings,proto3" json:"bindings,omitempty"`
-	Preserve      string                 `protobuf:"bytes,6,opt,name=preserve,proto3" json:"preserve,omitempty"`
-	UpdatedAt     int64                  `protobuf:"varint,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ShortCode    string                 `protobuf:"bytes,2,opt,name=short_code,json=shortCode,proto3" json:"short_code,omitempty"`
+	State        string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Capabilities []string               `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Bindings     []*BoundDoc            `protobuf:"bytes,5,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	Preserve     string                 `protobuf:"bytes,6,opt,name=preserve,proto3" json:"preserve,omitempty"`
+	UpdatedAt    int64                  `protobuf:"varint,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// before-stop 同一原因第二次放行时仍未解决的拦截原因, 工作台标记为待核对; 新回合开始时清空.
+	Unverified    string `protobuf:"bytes,8,opt,name=unverified,proto3" json:"unverified,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4023,6 +4025,13 @@ func (x *Session) GetUpdatedAt() int64 {
 		return x.UpdatedAt
 	}
 	return 0
+}
+
+func (x *Session) GetUnverified() string {
+	if x != nil {
+		return x.Unverified
+	}
+	return ""
 }
 
 type ListSessionsRequest struct {
@@ -4816,7 +4825,7 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\"\n" +
 	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"\x19\n" +
-	"\x17SetSessionStateResponse\"\xdc\x01\n" +
+	"\x17SetSessionStateResponse\"\xfc\x01\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -4826,7 +4835,10 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"\bbindings\x18\x05 \x03(\v2\x11.pair.v1.BoundDocR\bbindings\x12\x1a\n" +
 	"\bpreserve\x18\x06 \x01(\tR\bpreserve\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\a \x01(\x03R\tupdatedAt\"\x15\n" +
+	"updated_at\x18\a \x01(\x03R\tupdatedAt\x12\x1e\n" +
+	"\n" +
+	"unverified\x18\b \x01(\tR\n" +
+	"unverified\"\x15\n" +
 	"\x13ListSessionsRequest\"D\n" +
 	"\x14ListSessionsResponse\x12,\n" +
 	"\bsessions\x18\x01 \x03(\v2\x10.pair.v1.SessionR\bsessions\"X\n" +
