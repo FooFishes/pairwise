@@ -238,6 +238,8 @@ message PingResponse {
   string root = 3;
   string branch = 4;
   int32 pid = 5;
+  // 当前最新的事件序号, watch 默认从它之后开始输出.
+  int64 last_seq = 6;
 }
 
 message StatusRequest {}

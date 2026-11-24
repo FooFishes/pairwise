@@ -1435,12 +1435,14 @@ func (*PingRequest) Descriptor() ([]byte, []int) {
 }
 
 type PingResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
-	Fingerprint   string                 `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
-	Root          string                 `protobuf:"bytes,3,opt,name=root,proto3" json:"root,omitempty"`
-	Branch        string                 `protobuf:"bytes,4,opt,name=branch,proto3" json:"branch,omitempty"`
-	Pid           int32                  `protobuf:"varint,5,opt,name=pid,proto3" json:"pid,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Version     string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	Fingerprint string                 `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	Root        string                 `protobuf:"bytes,3,opt,name=root,proto3" json:"root,omitempty"`
+	Branch      string                 `protobuf:"bytes,4,opt,name=branch,proto3" json:"branch,omitempty"`
+	Pid         int32                  `protobuf:"varint,5,opt,name=pid,proto3" json:"pid,omitempty"`
+	// 当前最新的事件序号, watch 默认从它之后开始输出.
+	LastSeq       int64 `protobuf:"varint,6,opt,name=last_seq,json=lastSeq,proto3" json:"last_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1506,6 +1508,13 @@ func (x *PingResponse) GetBranch() string {
 func (x *PingResponse) GetPid() int32 {
 	if x != nil {
 		return x.Pid
+	}
+	return 0
+}
+
+func (x *PingResponse) GetLastSeq() int64 {
+	if x != nil {
+		return x.LastSeq
 	}
 	return 0
 }
@@ -4640,13 +4649,14 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"drained_at\x18\x11 \x01(\x03R\tdrainedAt\x12\x1f\n" +
 	"\vresolved_at\x18\x12 \x01(\x03R\n" +
 	"resolvedAt\"\r\n" +
-	"\vPingRequest\"\x88\x01\n" +
+	"\vPingRequest\"\xa3\x01\n" +
 	"\fPingResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12 \n" +
 	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12\x12\n" +
 	"\x04root\x18\x03 \x01(\tR\x04root\x12\x16\n" +
 	"\x06branch\x18\x04 \x01(\tR\x06branch\x12\x10\n" +
-	"\x03pid\x18\x05 \x01(\x05R\x03pid\"\x0f\n" +
+	"\x03pid\x18\x05 \x01(\x05R\x03pid\x12\x19\n" +
+	"\blast_seq\x18\x06 \x01(\x03R\alastSeq\"\x0f\n" +
 	"\rStatusRequest\"\x92\x02\n" +
 	"\x0eStatusResponse\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x16\n" +
