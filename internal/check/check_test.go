@@ -20,6 +20,10 @@ func newRepo(t *testing.T, files map[string]string) (r *repo.Repo, git func(args
 	for k, v := range map[string]string{
 		"GIT_CONFIG_GLOBAL":   os.DevNull,
 		"GIT_CONFIG_NOSYSTEM": "1",
+		// 关闭提交后在后台运行的 git maintenance, 它会与临时目录的清理竞争.
+		"GIT_CONFIG_COUNT":    "1",
+		"GIT_CONFIG_KEY_0":    "maintenance.auto",
+		"GIT_CONFIG_VALUE_0":  "false",
 		"GIT_AUTHOR_NAME":     "t",
 		"GIT_AUTHOR_EMAIL":    "t@example.com",
 		"GIT_COMMITTER_NAME":  "t",

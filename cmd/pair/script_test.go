@@ -39,6 +39,10 @@ func TestScript(t *testing.T) {
 			env.Setenv("PAIR_RUNTIME_DIR", runtime)
 			env.Setenv("HOME", env.WorkDir)
 			env.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			// 关闭提交后在后台运行的 git maintenance, 它会与临时目录的清理竞争.
+			env.Setenv("GIT_CONFIG_COUNT", "1")
+			env.Setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+			env.Setenv("GIT_CONFIG_VALUE_0", "false")
 			env.Setenv("GIT_AUTHOR_NAME", "pair")
 			env.Setenv("GIT_AUTHOR_EMAIL", "pair@example.com")
 			env.Setenv("GIT_COMMITTER_NAME", "pair")

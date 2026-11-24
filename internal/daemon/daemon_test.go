@@ -21,6 +21,10 @@ func runStub(t *testing.T, ctx context.Context) (string, *stubService, <-chan er
 	t.Setenv("PAIR_RUNTIME_DIR", runtime)
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// 关闭提交后在后台运行的 git maintenance, 它会与临时目录的清理竞争.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")
 	if err := os.MkdirAll(filepath.Join(root, ".pair", "modules"), 0o755); err != nil {

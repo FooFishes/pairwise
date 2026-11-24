@@ -17,6 +17,10 @@ func newRepo(t *testing.T) string {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// 关闭提交后在后台运行的 git maintenance, 它会与临时目录的清理竞争.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
