@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 
@@ -25,7 +26,8 @@ func parseTarget(s string) (doc.Target, error) {
 		err = fmt.Errorf("定位路径 %q 指向容器子项, 此处只接受 doc 或 doc#sec", s)
 	}
 	if err != nil {
-		return t, connect.NewError(connect.CodeInvalidArgument, err.Error())
+		return t, connect.NewError(connect.CodeInvalidArgument, err.Error()+
+			".\n修复操作: 执行 `pair list` 查看文档 ID, 再执行 `pair show <doc>` 查看其 ## 区块 ID, 以 `<doc>#<sec>` 形式重试")
 	}
 	return t, nil
 }
@@ -39,7 +41,7 @@ func findDoc(ix *repo.Index, id string) (*repo.Entry, error) {
 	}
 	if e.Doc == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("%s 无法解析: %v.\n修复操作: 执行 `pair check` 查看错误, 修正该文件的 Frontmatter 后重试", e.Rel, e.Err))
+			fmt.Sprintf("%s 无法解析: %v, 不能按区块合并.\n修复操作: 直接编辑 %[1]s 修正 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 执行 `pair check` 确认后重试", e.Rel, e.Err))
 	}
 	return e, nil
 }
@@ -52,7 +54,7 @@ func findSection(ix *repo.Index, target string) (*repo.Entry, *doc.Section, erro
 	}
 	if t.Section == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Sprintf("定位路径 %q 缺少区块 ID, 此处需要 doc#sec 形式", target))
+			fmt.Sprintf("定位路径 %q 缺少区块 ID, 此处需要 doc#sec 形式.\n修复操作: 执行 `pair show %s` 查看区块 ID, 以 `%[2]s#<sec>` 形式重试", target, t.Doc))
 	}
 	e, err := findDoc(ix, t.Doc)
 	if err != nil {
@@ -67,8 +69,11 @@ func findSection(ix *repo.Index, target string) (*repo.Entry, *doc.Section, erro
 }
 
 // ListDocs 列出文档摘要, kind 为空时列出全部.
-func (w *Workspace) ListDocs(_ context.Context, req *pairv1.ListDocsRequest) (*pairv1.ListDocsResponse, error) {
-	ix, _ := w.snapshot()
+func (w *Workspace) ListDocs(ctx context.Context, req *pairv1.ListDocsRequest) (*pairv1.ListDocsResponse, error) {
+	ix, _, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := &pairv1.ListDocsResponse{}
 	for _, e := range ix.Entries {
 		if req.Kind == pairv1.DocKind_DOC_KIND_UNSPECIFIED || pairv1.DocKind(e.Kind) == req.Kind {
@@ -79,8 +84,11 @@ func (w *Workspace) ListDocs(_ context.Context, req *pairv1.ListDocsRequest) (*p
 }
 
 // GetDoc 返回整份文档的结构化视图.
-func (w *Workspace) GetDoc(_ context.Context, req *pairv1.GetDocRequest) (*pairv1.GetDocResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) GetDoc(ctx context.Context, req *pairv1.GetDocRequest) (*pairv1.GetDocResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	e := lookupEntry(ix, req.Id, doc.Kind(req.Kind))
 	if e == nil {
 		return nil, connect.NewError(connect.CodeNotFound,
@@ -111,8 +119,11 @@ func lookupEntry(ix *repo.Index, id string, kind doc.Kind) *repo.Entry {
 }
 
 // Show 返回整文件或单个区块的原文, 并把整文件写入基准快照.
-func (w *Workspace) Show(_ context.Context, req *pairv1.ShowRequest) (*pairv1.ShowResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) Show(ctx context.Context, req *pairv1.ShowRequest) (*pairv1.ShowResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	t, err := parseTarget(req.Target)
 	if err != nil {
 		return nil, err
@@ -142,12 +153,20 @@ func (w *Workspace) Show(_ context.Context, req *pairv1.ShowRequest) (*pairv1.Sh
 }
 
 // Lookup 按源码路径反查 scope 命中的模块.
-func (w *Workspace) Lookup(_ context.Context, req *pairv1.LookupRequest) (*pairv1.LookupResponse, error) {
-	ix, _ := w.snapshot()
+func (w *Workspace) Lookup(ctx context.Context, req *pairv1.LookupRequest) (*pairv1.LookupResponse, error) {
+	ix, _, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := &pairv1.LookupResponse{}
 	for _, p := range req.Paths {
 		rel := w.relPath(p)
-		r := &pairv1.LookupResult{Path: rel, Ignored: w.repo.Ignored(rel)}
+		r := &pairv1.LookupResult{Path: rel, Ignored: w.config().Ignored(rel)}
+		if rel == ".." || strings.HasPrefix(rel, "../") {
+			// 工作树外的路径不属于任何模块; CLI 据 ../ 前缀说明.
+			resp.Results = append(resp.Results, r)
+			continue
+		}
 		for _, e := range ix.ModulesFor(rel) {
 			r.Docs = append(r.Docs, summary(e))
 		}
@@ -169,8 +188,11 @@ func (w *Workspace) relPath(p string) string {
 }
 
 // Check 校验全部文档.
-func (w *Workspace) Check(_ context.Context, req *pairv1.CheckRequest) (*pairv1.CheckResponse, error) {
-	ix, _ := w.snapshot()
+func (w *Workspace) Check(ctx context.Context, req *pairv1.CheckRequest) (*pairv1.CheckResponse, error) {
+	ix, _, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := &pairv1.CheckResponse{}
 	for _, d := range check.Run(ix, check.Options{Strict: req.Strict}) {
 		resp.Diagnostics = append(resp.Diagnostics, toDiagnostic(d))
@@ -180,7 +202,10 @@ func (w *Workspace) Check(_ context.Context, req *pairv1.CheckRequest) (*pairv1.
 
 // SectionDiff 返回区块确认原文与当前原文, 供界面高亮未审阅的改动.
 func (w *Workspace) SectionDiff(ctx context.Context, req *pairv1.SectionDiffRequest) (*pairv1.SectionDiffResponse, error) {
-	ix, _ := w.snapshot()
+	ix, _, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	e, s, err := findSection(ix, req.Target)
 	if err != nil {
 		return nil, err
@@ -243,14 +268,14 @@ func (w *Workspace) walkHistory(ctx context.Context, rel string, match func(raw 
 
 // Confirm 把区块 (省略 #sec 时为全部区块) 的当前哈希写入 confirmed_hash, 并清空其假设与撤回列表.
 // 只改 Frontmatter, 正文字节不变.
-func (w *Workspace) Confirm(_ context.Context, req *pairv1.ConfirmRequest) (*pairv1.ConfirmResponse, error) {
+func (w *Workspace) Confirm(ctx context.Context, req *pairv1.ConfirmRequest) (*pairv1.ConfirmResponse, error) {
 	t, err := parseTarget(req.Target)
 	if err != nil {
 		return nil, err
 	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	ix, err := w.reload()
+	ix, _, err := w.sync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +320,10 @@ func (w *Workspace) Confirm(_ context.Context, req *pairv1.ConfirmRequest) (*pai
 }
 
 // AckRetracted 移除区块中的一条撤回假设.
-func (w *Workspace) AckRetracted(_ context.Context, req *pairv1.AckRetractedRequest) (*pairv1.AckRetractedResponse, error) {
+func (w *Workspace) AckRetracted(ctx context.Context, req *pairv1.AckRetractedRequest) (*pairv1.AckRetractedResponse, error) {
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	ix, err := w.reload()
+	ix, _, err := w.sync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -325,12 +350,12 @@ func (w *Workspace) AckRetracted(_ context.Context, req *pairv1.AckRetractedRequ
 	return &pairv1.AckRetractedResponse{}, nil
 }
 
-// writeFront 在 Frontmatter 有变化时重新编码并写回 d, 正文字节不变, 返回写回后的整文件.
+// writeFront 在 Frontmatter 有变化时写回 d, 正文字节不变, 返回写回后的整文件.
 func (w *Workspace) writeFront(e *repo.Entry, d *doc.Document, dirty bool) ([]byte, error) {
 	if !dirty {
 		return d.Raw, nil
 	}
-	raw := slices.Concat(d.Front.Encode(), d.Raw[d.FrontEnd:])
+	raw := render(d)
 	if err := repo.WriteFileAtomic(e.Path, raw); err != nil {
 		return nil, err
 	}

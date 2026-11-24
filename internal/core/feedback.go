@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 )
 
 // Ask 校验并写入或覆盖 .pair/decisions/<id>.md.
-func (w *Workspace) Ask(_ context.Context, req *pairv1.AskRequest) (*pairv1.AskResponse, error) {
+func (w *Workspace) Ask(ctx context.Context, req *pairv1.AskRequest) (*pairv1.AskResponse, error) {
 	t, err := parseTarget(req.Id)
 	if err != nil {
 		return nil, err
@@ -30,7 +31,7 @@ func (w *Workspace) Ask(_ context.Context, req *pairv1.AskRequest) (*pairv1.AskR
 	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	ix, err := w.reload()
+	ix, branch, err := w.sync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,6 @@ func (w *Workspace) Ask(_ context.Context, req *pairv1.AskRequest) (*pairv1.AskR
 	if _, err := w.reload(); err != nil {
 		return nil, err
 	}
-	_, branch := w.snapshot()
 	dec, err := w.toDecision(branch, req.Id, d)
 	if err != nil {
 		return nil, err
@@ -85,10 +85,13 @@ func (w *Workspace) Ask(_ context.Context, req *pairv1.AskRequest) (*pairv1.AskR
 	return &pairv1.AskResponse{Id: req.Id, Path: w.repo.Rel(path), Replaced: statErr == nil, Decision: dec, UiUrl: w.uiURLValue()}, nil
 }
 
-// WaitDecision 等待开发者对问题点击 Trigger: 等到时立即标记为已读取并返回所选方案,
+// WaitDecision 等待开发者对问题点击 Trigger: 等到时立即标记为已读取并返回所选方案 (已被读取时直接返回),
 // 超时返回 decided=false 与默认方案. 通过事件订阅唤醒, 每次唤醒后以存储中的状态为准.
 func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRequest) (*pairv1.WaitDecisionResponse, error) {
-	ix, branch := w.snapshot()
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	e := ix.Decision(req.Id)
 	if e == nil || e.Doc == nil {
 		return nil, connect.NewError(connect.CodeNotFound,
@@ -96,7 +99,7 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 	}
 	secs := req.TimeoutSecs
 	if secs <= 0 {
-		secs = int32(w.repo.Config.AskWaitTimeoutSecs)
+		secs = int32(w.config().AskWaitTimeoutSecs)
 	}
 	resp := &pairv1.WaitDecisionResponse{DefaultOption: e.Doc.Front.DefaultOption, TimeoutSecs: secs}
 	timer := time.NewTimer(time.Duration(secs) * time.Second)
@@ -108,14 +111,23 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 		if err != nil && !isNotFound(err) {
 			return nil, err
 		}
-		if fb.GetState() == pairv1.FeedbackState_FEEDBACK_STATE_TRIGGERED {
-			if err := w.store.MarkDrained(branch, req.Id, req.SessionId); err != nil {
+		switch fb.GetState() {
+		case pairv1.FeedbackState_FEEDBACK_STATE_TRIGGERED:
+			// 与 pair drain 并发时条目可能已被读走, 此时回到循环开头按 DRAINED 处理.
+			err := w.store.MarkDrained(branch, req.Id, req.SessionId)
+			if isNotFound(err) {
+				continue
+			}
+			if err != nil {
 				return nil, err
 			}
 			if fb, err = w.store.Feedback(branch, req.Id); err != nil {
 				return nil, err
 			}
 			w.emit(&pairv1.Event{Type: evDrained, Branch: branch, Ids: []string{req.Id}, SessionId: req.SessionId})
+			fallthrough
+		case pairv1.FeedbackState_FEEDBACK_STATE_DRAINED:
+			// 已被 pair drain 读取的选择同样是开发者的结论, 不能让等待方改按默认方案继续.
 			resp.Decided, resp.Feedback = true, enrich(ix, fb)
 			err = w.touchTurn(req.SessionId, func(tu *store.Turn) { tu.Drained = appendNew(tu.Drained, req.Id) })
 			return resp, err
@@ -138,8 +150,11 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 }
 
 // Drain 读取全部已发送的反馈并标记为已读取.
-func (w *Workspace) Drain(_ context.Context, req *pairv1.DrainRequest) (*pairv1.DrainResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) Drain(ctx context.Context, req *pairv1.DrainRequest) (*pairv1.DrainResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	items, err := w.store.Drain(branch, req.SessionId)
 	if err != nil {
 		return nil, err
@@ -157,8 +172,11 @@ func (w *Workspace) Drain(_ context.Context, req *pairv1.DrainRequest) (*pairv1.
 }
 
 // StageDecide 暂存对问题的方案选择.
-func (w *Workspace) StageDecide(_ context.Context, req *pairv1.StageDecideRequest) (*pairv1.StageDecideResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) StageDecide(ctx context.Context, req *pairv1.StageDecideRequest) (*pairv1.StageDecideResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	e := ix.Decision(req.DecisionId)
 	if e == nil || e.Doc == nil {
 		return nil, connect.NewError(connect.CodeNotFound,
@@ -176,16 +194,22 @@ func (w *Workspace) StageDecide(_ context.Context, req *pairv1.StageDecideReques
 				req.Pick, req.DecisionId, strings.Join(ids, ", ")))
 	}
 	fb, err := w.store.StageDecision(branch, req.DecisionId, req.Pick, req.Note, e.Doc.Front.Targets)
+	if errors.Is(err, store.ErrSent) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()+"\n修复操作: 等待 Agent 执行 `pair drain` 并闭环后再重新选择")
+	}
 	if err != nil {
-		return nil, storeErr(err, "")
+		return nil, err
 	}
 	w.emit(&pairv1.Event{Type: evStageChanged, Branch: branch, Ids: []string{fb.Id}})
 	return &pairv1.StageDecideResponse{Item: enrich(ix, fb)}, nil
 }
 
 // StageNote 暂存针对区块或其中某条假设的修改说明.
-func (w *Workspace) StageNote(_ context.Context, req *pairv1.StageNoteRequest) (*pairv1.StageNoteResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) StageNote(ctx context.Context, req *pairv1.StageNoteRequest) (*pairv1.StageNoteResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	e, s, err := findSection(ix, req.Target)
 	if err != nil {
 		return nil, err
@@ -213,18 +237,26 @@ func (w *Workspace) StageNote(_ context.Context, req *pairv1.StageNoteRequest) (
 }
 
 // StageRemove 删除一条尚未发送的暂存条目.
-func (w *Workspace) StageRemove(_ context.Context, req *pairv1.StageRemoveRequest) (*pairv1.StageRemoveResponse, error) {
-	_, branch := w.snapshot()
-	if err := w.store.RemoveStaged(branch, req.Id); err != nil {
-		return nil, storeErr(err, fmt.Sprintf("暂存区中没有「%s」, 它可能已发送或不存在.\n修复操作: 执行 `pair status` 查看暂存条目", req.Id))
+func (w *Workspace) StageRemove(ctx context.Context, req *pairv1.StageRemoveRequest) (*pairv1.StageRemoveResponse, error) {
+	_, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.store.RemoveStaged(branch, req.Id); isNotFound(err) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Sprintf("暂存区中没有「%s」, 它可能已发送或不存在.\n修复操作: 执行 `pair stage list` 查看暂存条目的 ID", req.Id))
+	} else if err != nil {
+		return nil, err
 	}
 	w.emit(&pairv1.Event{Type: evStageChanged, Branch: branch, Ids: []string{req.Id}})
 	return &pairv1.StageRemoveResponse{}, nil
 }
 
 // ListFeedback 列出当前分支的反馈条目.
-func (w *Workspace) ListFeedback(_ context.Context, req *pairv1.ListFeedbackRequest) (*pairv1.ListFeedbackResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) ListFeedback(ctx context.Context, req *pairv1.ListFeedbackRequest) (*pairv1.ListFeedbackResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	items, err := w.store.ListFeedback(branch, req.States...)
 	if err != nil {
 		return nil, err
@@ -236,8 +268,11 @@ func (w *Workspace) ListFeedback(_ context.Context, req *pairv1.ListFeedbackRequ
 }
 
 // Trigger 发送暂存区的全部条目.
-func (w *Workspace) Trigger(_ context.Context, req *pairv1.TriggerRequest) (*pairv1.TriggerResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) Trigger(ctx context.Context, req *pairv1.TriggerRequest) (*pairv1.TriggerResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	items, err := w.store.Trigger(branch, req.Steer)
 	if err != nil {
 		return nil, err

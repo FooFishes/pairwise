@@ -278,10 +278,24 @@ func TestDecisionClosure(t *testing.T) {
 		t.Errorf("turn = %+v", turn)
 	}
 
-	must(w.Ask(ctx, &pairv1.AskRequest{Id: "shop-policy", Content: decision}))
+	// 以同一 ID 重新提交的是新一轮问题: 不带上一轮的进度, 闭环前须等开发者确认.
+	again := must(w.Ask(ctx, &pairv1.AskRequest{Id: "shop-policy", Content: decision}))
+	if len(again.Decision.Progress) != 0 {
+		t.Errorf("新一轮问题的进度 = %v", again.Decision.Progress)
+	}
+	if _, err := w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#list", Resolves: []string{"shop-policy"}, NoChange: "x"}); err == nil || !strings.Contains(err.Error(), "开发者尚未确认") {
+		t.Errorf("新一轮问题闭环 err = %v", err)
+	}
 	r = must(w.WaitDecision(ctx, &pairv1.WaitDecisionRequest{Id: "shop-policy", TimeoutSecs: 1}))
 	if r.Decided || r.DefaultOption != "opt-a" {
 		t.Errorf("超时 wait = %v", r)
+	}
+	// 已被 drain 读走的选择同样立即返回.
+	must(w.StageDecide(ctx, &pairv1.StageDecideRequest{DecisionId: "shop-policy", Pick: "opt-b"}))
+	must(w.Trigger(ctx, &pairv1.TriggerRequest{}))
+	must(w.Drain(ctx, &pairv1.DrainRequest{}))
+	if r = must(w.WaitDecision(ctx, &pairv1.WaitDecisionRequest{Id: "shop-policy", TimeoutSecs: 5})); !r.Decided || r.Feedback.Pick != "opt-b" {
+		t.Errorf("drain 之后 wait = %v", r)
 	}
 }
 

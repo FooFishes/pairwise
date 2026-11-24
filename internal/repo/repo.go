@@ -122,10 +122,15 @@ func (r *Repo) Rel(abs string) string {
 
 // Ignored 报告相对路径是否命中 config.toml 的 ignore_globs. .pair/ 下的路径始终视为忽略.
 func (r *Repo) Ignored(rel string) bool {
+	return r.Config.Ignored(rel)
+}
+
+// Ignored 报告相对路径是否命中 ignore_globs. .pair/ 下的路径始终视为忽略.
+func (c Config) Ignored(rel string) bool {
 	if rel == Dir || strings.HasPrefix(rel, Dir+"/") {
 		return true
 	}
-	return slices.ContainsFunc(r.Config.IgnoreGlobs, func(g string) bool {
+	return slices.ContainsFunc(c.IgnoreGlobs, func(g string) bool {
 		return doublestar.MatchUnvalidated(g, rel)
 	})
 }

@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,11 +44,10 @@ func (w *Workspace) Update(ctx context.Context, req *pairv1.UpdateRequest) (*pai
 	}
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	ix, err := w.reload()
+	ix, branch, err := w.sync(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_, branch := w.snapshot()
 	fbs, err := w.resolving(ix, branch, req.Resolves)
 	if err != nil {
 		return nil, err
@@ -87,6 +87,10 @@ func (w *Workspace) resolving(ix *repo.Index, branch string, ids []string) ([]*p
 		case pairv1.FeedbackState_FEEDBACK_STATE_TRIGGERED, pairv1.FeedbackState_FEEDBACK_STATE_DRAINED:
 			out = append(out, fb)
 		case pairv1.FeedbackState_FEEDBACK_STATE_RESOLVED:
+			// 闭环会删除问题文件; 问题文件仍在说明它以同一 ID 重新提交, 是尚未确认的新一轮问题.
+			if fb.Kind == kindDecision && ix.Decision(id) != nil {
+				return nil, undecided(id)
+			}
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Sprintf("反馈「%s」已闭环, 不能再次关联.\n修复操作: 去掉 `--resolves %[1]s` 后重试", id))
 		default:
@@ -116,15 +120,19 @@ func (w *Workspace) noChange(ix *repo.Index, branch string, t doc.Target, req *p
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Sprintf("批注「%s」不能以 --no-change 结案, 批注须由修改其目标区块的更新闭环.\n修复操作: 按批注修改后执行 `pair update %s --base <hash> --resolves %[1]s`", fb.Id, fb.Target))
 		}
-		if !slices.Contains(fb.Targets, t.String()) {
+		if !slices.ContainsFunc(fb.Targets, func(target string) bool { return covers(t, target) }) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Sprintf("「%s」不是问题「%s」的目标, 其 targets 为 %s.\n修复操作: 对其中的目标执行 `pair update <module#sec> --resolves %[2]s --no-change \"<原因>\"`",
 					t, fb.Id, strings.Join(fb.Targets, ", ")))
 		}
 	}
 	for _, fb := range fbs {
-		if err := w.store.SetProgress(branch, fb.Id, t.String(), progressNoChange, req.NoChange); err != nil {
-			return nil, err
+		for _, target := range fb.Targets {
+			if covers(t, target) {
+				if err := w.store.SetProgress(branch, fb.Id, target, progressNoChange, req.NoChange); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	resp := &pairv1.UpdateResponse{DocId: t.Doc}
@@ -367,27 +375,44 @@ func sectionTheirs(t doc.Target, base *doc.Document, content string) (*doc.Docum
 			fmt.Sprintf("输入标题的锚点「%s」与目标区块「%s」不一致.\n修复操作: 改为 `<!-- #%[2]s -->`; 如需更改区块 ID, 改用整文档更新 `pair update %s --base <hash>`", in.HeadingID, t.Section, t.Doc))
 	}
 	front := base.Raw[:base.FrontEnd]
+	want := outline(base)
 	var raw []byte
 	switch s := base.Section(t.Section); {
 	case s != nil:
-		heading := in.Heading
+		heading, body := in.Heading, in.Body
 		if heading == nil {
-			heading = base.Raw[s.Span.Start:s.Body.Start]
+			orig := base.Raw[s.Body.Start:s.Span.End]
+			// 只设置假设、不带正文的输入保留原正文; 什么都没有的输入多半是漏了 heredoc, 不能清空正文.
+			switch {
+			case len(bytes.TrimSpace(body)) > 0:
+			case in.HasAssumptions:
+				body = orig
+			default:
+				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf(
+					"区块输入为空, 未写入.\n修复操作: 执行 `pair show %s` 读取区块后, 把修改后的正文经 stdin (`<<'EOF'`) 或 --file 传给 `pair update %[1]s --base <hash>`", t))
+			}
+			heading, body = base.Raw[s.Span.Start:s.Body.Start], keepSeparator(orig, body)
 		}
-		sec := slices.Concat(heading, in.Body)
-		if s.Span.End < len(base.Raw) {
-			sec = blankLineAfter(sec)
-		}
+		sec := keepEnding(base.Text(s.Span), slices.Concat(heading, body))
 		raw = doc.Assemble(front, base.Raw[base.FrontEnd:s.Span.Start], sec, base.Raw[s.Span.End:])
 	case in.Heading == nil:
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Sprintf("区块「%s」不存在, 新建区块的输入必须以标题行开头.\n修复操作: 在输入首行写 `## <标题> <!-- #%s -->` 后重试", t, t.Section))
 	default:
+		want = append(want, t.Section)
 		raw = doc.Assemble(front, blankLineAfter(base.Raw[base.FrontEnd:]), slices.Concat(in.Heading, in.Body))
 	}
 	d, err := doc.Parse(raw, base.Kind)
 	if err != nil {
 		return nil, err
+	}
+	// 输入中未闭合的代码块、HTML 注释或夹带的 ## 标题会吞掉或拆分其后的区块, 合并时将被当作删除.
+	if got := outline(d); !slices.Equal(got, want) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf(
+			"区块输入改变了文档的区块切分, 未写入: 期望区块为 %s, 按本次输入拼接后为 %s. "+
+				"输入中可能有未闭合的 ``` 代码块或 `<!--` 注释吞掉了其后的区块, 或夹带了其他 `##` 标题.\n"+
+				"修复操作: 闭合输入中的代码块与注释, 只提交区块 #%s 自身的内容, 再重新执行 `pair update %s --base <hash>`",
+			strings.Join(want, ", "), cmp.Or(strings.Join(got, ", "), "(无)"), t.Section, t))
 	}
 	if in.HasAssumptions {
 		m := metaOf(d, t.Section)
@@ -395,6 +420,39 @@ func sectionTheirs(t doc.Target, base *doc.Document, content string) (*doc.Docum
 		setMeta(d.Front, t.Section, m)
 	}
 	return d, nil
+}
+
+// outline 返回文档的区块序列, 缺锚点的区块以标题代替.
+func outline(d *doc.Document) []string {
+	var out []string
+	for _, s := range d.Sections {
+		out = append(out, cmp.Or(s.ID, "## "+s.Title))
+	}
+	return out
+}
+
+// keepSeparator 在只替换正文的输入不以空行开头时, 沿用原正文开头的空行, 使标题与正文之间的
+// 分隔不被当作改动 (stdin 输入 `<<'EOF'` 通常直接从正文第一行写起).
+func keepSeparator(orig, body []byte) []byte {
+	first, _, _ := bytes.Cut(body, []byte("\n"))
+	if len(bytes.TrimSpace(first)) == 0 {
+		return body
+	}
+	n := 0
+	for n < len(orig) {
+		i := bytes.IndexByte(orig[n:], '\n')
+		if i < 0 || len(bytes.TrimSpace(orig[n:n+i])) > 0 {
+			break
+		}
+		n += i + 1
+	}
+	return slices.Concat(orig[:n], body)
+}
+
+// keepEnding 让替换后的区块沿用原区块末尾的换行与空行, 使与下一区块之间的分隔不被当作改动.
+func keepEnding(orig, sec []byte) []byte {
+	end := bytes.TrimRight(orig, "\r\n")
+	return slices.Concat(bytes.TrimRight(sec, "\r\n"), orig[len(end):])
 }
 
 // blankLineAfter 让 b 以一个空行结束, 使后面拼接的区块标题与前文之间隔开.
@@ -496,9 +554,9 @@ func conflictErr(t doc.Target, cs []merge.Conflict) error {
 		t.Doc, strings.Join(where, ", "), t, strings.Join(diffs, "\n")))
 }
 
-// render 用当前 Frontmatter 节点重新编码文档, 正文字节不变.
+// render 按当前 Frontmatter 节点写回文档: 未改动的键沿用原文字节, 正文字节不变.
 func render(d *doc.Document) []byte {
-	return slices.Concat(d.Front.Encode(), d.Raw[d.FrontEnd:])
+	return slices.Concat(d.Front.Render(d.Raw[:d.FrontEnd]), d.Raw[d.FrontEnd:])
 }
 
 // setID 把 Frontmatter 的 id 设为 id; 没有 id 键时插在最前.

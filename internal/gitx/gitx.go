@@ -24,8 +24,11 @@ type Repo struct {
 // Open 从 dir 向上定位所在的工作树. 返回的路径均为解析过符号链接的绝对路径.
 func Open(ctx context.Context, dir string) (*Repo, error) {
 	out, err := run(ctx, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir")
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, fmt.Errorf("未找到 git 命令.\n修复操作: 安装 Git 并确认 `git --version` 可执行后重试")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("%s 不在 Git 工作树中: %w", dir, err)
+		return nil, fmt.Errorf("%s 不在 Git 工作树中.\n修复操作: 进入仓库目录后重试; 新项目先执行 `git init`", dir)
 	}
 	f := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	return &Repo{Root: f[0], GitDir: f[1], CommonDir: f[2]}, nil

@@ -2,14 +2,14 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
-
-	"connectrpc.com/connect/v2"
 
 	pairv1 "github.com/FooFishes/pairwise/gen/pair/v1"
 	"github.com/FooFishes/pairwise/gen/pair/v1/pairv1connect"
@@ -41,10 +41,14 @@ type Workspace struct {
 	repo  *repo.Repo
 	store *store.Store
 
-	// mu 保护 ix、branch 与 uiURL; ix 是只读快照, 取出后无需持锁读取.
+	// mu 保护 ix、cfg、branch、head 与 uiURL; ix 是只读快照, 取出后无需持锁读取.
+	// cfg 随 .pair/config.toml 的变化重新读取, repo.Config 只是启动时的值.
+	// head 是确定 branch 时 HEAD 文件的内容, 用来廉价地发现分支切换.
 	mu     sync.Mutex
 	ix     *repo.Index
+	cfg    repo.Config
 	branch string
+	head   []byte
 	uiURL  string
 
 	// wmu 串行化写 .pair/ 文件的操作, 使读取磁盘、合并与写回之间不被其他写入穿插.
@@ -66,6 +70,10 @@ func New(ctx context.Context, dir string) (daemon.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	head, err := os.ReadFile(r.Git.HeadPath())
+	if err != nil {
+		return nil, err
+	}
 	branch, err := r.Git.Branch(ctx)
 	if err != nil {
 		return nil, err
@@ -82,7 +90,9 @@ func New(ctx context.Context, dir string) (daemon.Service, error) {
 		repo:   r,
 		store:  st,
 		ix:     ix,
+		cfg:    r.Config,
 		branch: branch,
+		head:   head,
 		subs:   map[chan *pairv1.Event]struct{}{},
 		done:   make(chan struct{}),
 	}, nil
@@ -95,6 +105,49 @@ func (w *Workspace) snapshot() (*repo.Index, string) {
 	return w.ix, w.branch
 }
 
+// sync 在请求开始时按执行时的 HEAD 与磁盘内容校准分支与索引, 返回新索引与当前分支.
+// 文件监听有去抖延迟, 紧随 git checkout 或外部编辑执行的命令不能依赖它.
+func (w *Workspace) sync(ctx context.Context) (*repo.Index, string, error) {
+	if err := w.syncBranch(ctx); err != nil {
+		return nil, "", err
+	}
+	ix, err := w.reload()
+	if err != nil {
+		return nil, "", err
+	}
+	_, branch := w.snapshot()
+	return ix, branch, nil
+}
+
+// syncBranch 在 HEAD 变化时切换到新分支, 并使旧分支的绑定失效.
+func (w *Workspace) syncBranch(ctx context.Context) error {
+	head, err := os.ReadFile(w.repo.Git.HeadPath())
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	same := bytes.Equal(head, w.head)
+	w.mu.Unlock()
+	if same {
+		return nil
+	}
+	branch, err := w.repo.Git.Branch(ctx)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	changed := branch != w.branch
+	w.branch, w.head = branch, head
+	w.mu.Unlock()
+	if changed {
+		if err := w.store.InvalidateBindings(branch); err != nil {
+			return err
+		}
+		w.emit(&pairv1.Event{Type: evBranchChanged, Branch: branch})
+	}
+	return nil
+}
+
 // reload 从磁盘重建索引, 对内容哈希变化 (含新增与删除) 的文档发 doc_changed, 返回新索引.
 func (w *Workspace) reload() (*repo.Index, error) {
 	w.mu.Lock()
@@ -102,6 +155,12 @@ func (w *Workspace) reload() (*repo.Index, error) {
 	ix, err := w.repo.Load()
 	if err != nil {
 		return nil, err
+	}
+	// 配置有误时沿用上一份有效配置, 错误由 pair check 与下次启动报告.
+	if cfg, err := repo.LoadConfig(filepath.Join(w.repo.PairDir, "config.toml")); err == nil {
+		w.cfg = cfg
+	} else {
+		slog.Warn("读取配置失败, 沿用上一份配置", "err", err)
 	}
 	old := fingerprints(w.ix)
 	var ids []string
@@ -196,22 +255,9 @@ func (w *Workspace) Reload(ctx context.Context) {
 
 // BranchChanged 按新分支重建索引并使旧分支的绑定失效.
 func (w *Workspace) BranchChanged(ctx context.Context) {
-	branch, err := w.repo.Git.Branch(ctx)
-	if err != nil {
-		slog.Warn("读取当前分支失败", "err", err)
-		return
+	if _, _, err := w.sync(ctx); err != nil {
+		slog.Warn("按新分支重建索引失败", "err", err)
 	}
-	w.mu.Lock()
-	changed := branch != w.branch
-	w.branch = branch
-	w.mu.Unlock()
-	if changed {
-		if err := w.store.InvalidateBindings(branch); err != nil {
-			slog.Warn("使旧分支绑定失效失败", "err", err)
-		}
-		w.emit(&pairv1.Event{Type: evBranchChanged, Branch: branch})
-	}
-	w.Reload(ctx)
 }
 
 // SetUIURL 记录界面地址.
@@ -219,6 +265,13 @@ func (w *Workspace) SetUIURL(url string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.uiURL = url
+}
+
+// config 返回当前配置.
+func (w *Workspace) config() repo.Config {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cfg
 }
 
 func (w *Workspace) uiURLValue() string {
@@ -261,8 +314,11 @@ func (w *Workspace) Ping(context.Context, *pairv1.PingRequest) (*pairv1.PingResp
 }
 
 // Status 汇总文档、反馈队列与诊断.
-func (w *Workspace) Status(context.Context, *pairv1.StatusRequest) (*pairv1.StatusResponse, error) {
-	ix, branch := w.snapshot()
+func (w *Workspace) Status(ctx context.Context, _ *pairv1.StatusRequest) (*pairv1.StatusResponse, error) {
+	ix, branch, err := w.sync(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp := &pairv1.StatusResponse{Root: w.repo.Root(), Branch: branch, UiUrl: w.uiURLValue()}
 	for _, e := range ix.Entries {
 		resp.Docs = append(resp.Docs, summary(e))
@@ -316,15 +372,4 @@ func appendNew(list []string, ids ...string) []string {
 
 func isNotFound(err error) bool {
 	return errors.Is(err, store.ErrNotFound)
-}
-
-// storeErr 把存储的哨兵错误转换为面向模型的错误.
-func storeErr(err error, notFound string) error {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return connect.NewError(connect.CodeNotFound, notFound)
-	case errors.Is(err, store.ErrSent):
-		return connect.NewError(connect.CodeFailedPrecondition, err.Error()+"\n修复操作: 等待 Agent 执行 `pair drain` 并闭环后再重新选择")
-	}
-	return err
 }
