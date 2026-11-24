@@ -110,7 +110,7 @@ id: meal
 id: closed-shop
 targets:
   - discover#list
-  - pick-shop
+  - pick-shop#list
 default_option: opt-a
 ---
 
@@ -159,6 +159,13 @@ func TestRun(t *testing.T) {
 			".pair/decisions/closed-shop.md:missing-compare",
 			".pair/decisions/closed-shop.md:unresolved-target",
 			".pair/decisions/closed-shop.md:invalid-target",
+		}},
+		{"问题目标须是 ## 区块的规范路径", map[string]string{
+			".pair/decisions/closed-shop.md": strings.Replace(closedShop, "  - pick-shop#list\n",
+				"  - pick-shop\n  - \"@pick-shop#list\"\n  - discover#states\n  - discover#states/day\n", 1),
+		}, false, []string{
+			".pair/decisions/closed-shop.md:invalid-target", ".pair/decisions/closed-shop.md:invalid-target",
+			".pair/decisions/closed-shop.md:invalid-target", ".pair/decisions/closed-shop.md:invalid-target",
 		}},
 		{"id 与文件名不一致", map[string]string{
 			".pair/modules/discover.md": strings.Replace(discover, "id: discover", "id: discovery", 1),

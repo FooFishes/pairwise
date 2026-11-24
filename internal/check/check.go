@@ -62,7 +62,7 @@ func Doc(ix *repo.Index, e *repo.Entry) []doc.Diagnostic {
 	if e.Doc == nil {
 		return []doc.Diagnostic{{
 			Severity: doc.SeverityError, Line: 1, Code: "parse-error", Message: e.Err.Error(),
-			Fix: "修正文件开头的 Frontmatter: 首行与结束行均为 `---`, 中间是合法的 YAML 映射",
+			Fix: "直接编辑该文件修正开头的 Frontmatter (首行与结束行均为 `---`, 中间是合法的 YAML 映射), 再执行 `pair check` 确认",
 		}}
 	}
 	c := &checker{ix: ix, e: e, d: e.Doc, f: e.Doc.Front, diags: slices.Clone(e.Doc.Diags)}
@@ -167,9 +167,19 @@ func (c *checker) decision() {
 			"在 Frontmatter 补上受影响的区块列表, 如 `targets: [\"discover#list\"]`; "+c.resubmit())
 	}
 	for _, s := range c.f.Targets {
+		// 目标须是规范的 doc#sec 并指向 ## 区块: 闭环时按区块比对 update 与 --no-change 的目标.
 		t, err := doc.ParseTarget(s)
+		if err == nil && (t.Section == "" || t.Item != "" || t.String() != s) {
+			err = fmt.Errorf("targets 中的 `%s` 不是 module#sec 形式的区块路径", s)
+		}
 		if err != nil {
-			c.add(doc.SeverityError, line, "invalid-target", err.Error(), "改为 `module#sec` 形式; "+c.resubmit())
+			c.add(doc.SeverityError, line, "invalid-target", err.Error(), "改为不带 @ 的 `module#sec`, 其中 sec 是 ## 区块的 ID; "+c.resubmit())
+			continue
+		}
+		if o := c.ix.Doc(t.Doc); o != nil && o.Doc != nil && o.Doc.Section(t.Section) == nil && o.Doc.Container(t.Section) != nil {
+			c.add(doc.SeverityError, line, "invalid-target",
+				fmt.Sprintf("targets 中的 `%s` 指向容器而不是 ## 区块", s),
+				fmt.Sprintf("改为容器所在区块的路径 (执行 `pair show %s` 查看区块 ID); %s", t.Doc, c.resubmit()))
 			continue
 		}
 		if reason, fix := c.resolve(t); reason != "" {
