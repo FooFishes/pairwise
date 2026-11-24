@@ -1,5 +1,5 @@
-import { useState } from "react"
-import ReactMarkdown from "react-markdown"
+import { useState, type ComponentProps } from "react"
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { motion } from "motion/react"
 import { cn } from "cn"
@@ -17,15 +17,77 @@ import {
   type Block,
   type LayoutNode,
 } from "@/gen/pair/v1/pair_pb"
-import { kindName } from "@/lib/rpc"
-import { useDocCtx, useNav } from "@/lib/nav"
+import { kindName, sentLabels } from "@/lib/rpc"
+import { routeHash, useDocCtx, useNav } from "@/lib/nav"
 import { useStageDecide } from "@/lib/queries"
+
+type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] }
+
+// 与 internal/doc 的 refRe 一致, 另外接受只写文档 ID 的 @doc; 前一个字符是字母数字时不算引用 (如邮箱).
+const refRe = /(?<![A-Za-z0-9])@[A-Za-z0-9_-]+(?:#[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?)?/g
+
+/** splitRefs 把文本节点中的引用切成以引用原文为地址的链接节点. */
+function splitRefs(node: MdNode): MdNode[] {
+  const text = node.value!
+  const out: MdNode[] = []
+  let last = 0
+  for (const m of text.matchAll(refRe)) {
+    if (m.index > last) out.push({ type: "text", value: text.slice(last, m.index) })
+    out.push({ type: "link", url: m[0], children: [{ type: "text", value: m[0] }] })
+    last = m.index + m[0].length
+  }
+  if (last === 0) return [node]
+  if (last < text.length) out.push({ type: "text", value: text.slice(last) })
+  return out
+}
+
+/** remarkRefs 把正文中的引用转为链接; 只处理文本节点, 代码与已有链接内的引用保持原样. */
+function remarkRefs() {
+  const walk = (node: MdNode) => {
+    if (node.type === "link" || node.type === "linkReference" || !node.children) return
+    node.children = node.children.flatMap((c) => {
+      if (c.type === "text") return splitRefs(c)
+      walk(c)
+      return [c]
+    })
+  }
+  return walk
+}
+
+/** MdLink 渲染正文链接: 引用解析到文档时在工作台内跳转并定位区块, 解析不到时按原文显示. */
+function MdLink({ node, href = "", children, ...props }: ComponentProps<"a"> & ExtraProps) {
+  const { resolve, go } = useNav()
+  if (!href.startsWith("@")) {
+    return (
+      <a href={href} {...props}>
+        {children}
+      </a>
+    )
+  }
+  const route = resolve(href)
+  if (!route) return children
+  return (
+    <a
+      href={routeHash(route)}
+      onClick={(e) => {
+        // 经 go 跳转才会递增 seq, 重复点击同一引用也会再次定位.
+        e.preventDefault()
+        go(route)
+      }}
+    >
+      {children}
+    </a>
+  )
+}
+
+const remarkPlugins = [remarkGfm, remarkRefs]
+const components: Components = { a: MdLink }
 
 /** Markdown 渲染普通正文; 跳过 HTML, 让 pw: 注释与锚点不显示. */
 export function Markdown({ text, className }: { text: string; className?: string }) {
   return (
     <div className={cn("md", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components} skipHtml>
         {text}
       </ReactMarkdown>
     </div>
@@ -116,7 +178,7 @@ function Compare({ block }: { block: Block }) {
             <div className="flex min-h-9 items-center gap-1.5 border-b px-3 py-1.5">
               <span className="text-[13px] font-medium">{item.title}</span>
               {decision?.defaultOption === item.id && <Badge variant="secondary">默认</Badge>}
-              {picked && <Badge>{pick.state === FeedbackState.STAGED ? "已选择" : "已发送"}</Badge>}
+              {picked && <Badge>{pick.state === FeedbackState.STAGED ? "已选择" : sentLabels[pick.state]}</Badge>}
             </div>
             <div className="flex-1 px-3 py-2.5">
               <Blocks blocks={item.blocks} />

@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { FeedbackKind, FeedbackState, type Feedback, type Session } from "@/gen/pair/v1/pair_pb"
 import { useNav } from "@/lib/nav"
-import { progressLabels } from "@/lib/rpc"
+import { progressLabels, sentLabels } from "@/lib/rpc"
 import { useSessions, useStageRemove, useTrigger } from "@/lib/queries"
 
 const rowMotion = {
@@ -111,11 +112,6 @@ function SendBar({ count }: { count: number }) {
   )
 }
 
-const stateLabels: Partial<Record<FeedbackState, string>> = {
-  [FeedbackState.TRIGGERED]: "已发送",
-  [FeedbackState.DRAINED]: "已读取",
-}
-
 function FeedbackRow({ item: f, removable }: { item: Feedback; removable?: boolean }) {
   const { go, openTarget } = useNav()
   const remove = useStageRemove()
@@ -127,9 +123,9 @@ function FeedbackRow({ item: f, removable }: { item: Feedback; removable?: boole
       <button type="button" onClick={open} className="block w-full text-left">
         <div className="flex items-center gap-1.5 pr-5">
           <span className="truncate font-mono text-[11px] text-muted-foreground">{decision ? f.id : f.target}</span>
-          {stateLabels[f.state] && (
+          {sentLabels[f.state] && (
             <Badge variant={f.state === FeedbackState.DRAINED ? "secondary" : "outline"} className="ml-auto">
-              {stateLabels[f.state]}
+              {sentLabels[f.state]}
             </Badge>
           )}
         </div>
@@ -179,8 +175,18 @@ function SessionRow({ session: s }: { session: Session }) {
     <div className="rounded-md px-2 py-1.5 text-xs">
       <div className="flex items-center gap-1.5">
         <span className="font-mono">{s.shortCode || s.id}</span>
+        {s.unverified && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="unconfirmed">待核对</Badge>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="whitespace-pre-line">
+              {s.unverified}
+            </TooltipContent>
+          </Tooltip>
+        )}
         <Badge variant={s.state === "running" ? "default" : "secondary"} className="ml-auto">
-          {sessionStates[s.state]}
+          {sessionStates[s.state] ?? s.state}
         </Badge>
       </div>
       {s.bindings.length > 0 && (

@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react"
 import type { PanZoom } from "panzoom"
 import { MinusIcon, PlusIcon, ScanIcon } from "lucide-react"
+import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -28,11 +29,9 @@ function nodeTarget(el: Element, ids: string[]): string | undefined {
   return ids.find((id) => names.includes(id))
 }
 
-const MAX_HEIGHT = 520
-const MIN_SCALE = 0.75
 let renderSeq = 0
 
-/** Mermaid 把图表渲染为可缩放平移的画布: 拖动平移, ⌘ 或双指捏合缩放, 点击与 links 同名的节点回调 onLink. */
+/** Mermaid 把图表按容器宽度等比渲染为可缩放平移的画布: 拖动平移, ⌘ 或双指捏合缩放, 点击与 links 同名的节点回调 onLink. */
 export function Mermaid({
   code,
   links,
@@ -45,33 +44,26 @@ export function Mermaid({
   const canvas = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const pz = useRef<PanZoom | null>(null)
-  const size = useRef({ w: 0, h: 0 })
   const linkOf = useEffectEvent((el: Element) => nodeTarget(el, links))
   const follow = useEffectEvent((id: string) => onLink(id))
   const dark = useDark()
-  const [height, setHeight] = useState(0)
+  const [ready, setReady] = useState(false)
   const [error, setError] = useState("")
 
-  // fit 把整张图缩放到画布内居中, 图太宽时保持可读的最小比例并靠左, 由用户平移查看.
+  // 未缩放时图表由 CSS 适应画布宽度, 适应画布即回到原始变换.
   const fit = () => {
-    const cw = canvas.current!.clientWidth
-    const { w, h } = size.current
-    const scale = Math.max(MIN_SCALE, Math.min(1, (cw - 32) / w, (MAX_HEIGHT - 32) / h))
-    const ch = Math.min(h * scale + 32, MAX_HEIGHT)
-    setHeight(ch)
-    pz.current!.zoomAbs(0, 0, scale)
-    pz.current!.moveTo(Math.max(16, (cw - w * scale) / 2), Math.max(16, (ch - h * scale) / 2))
+    pz.current?.zoomAbs(0, 0, 1)
+    pz.current?.moveTo(0, 0)
   }
 
   const zoom = (factor: number) => {
     const c = canvas.current!
-    pz.current!.smoothZoom(c.clientWidth / 2, c.clientHeight / 2, factor)
+    pz.current?.smoothZoom(c.clientWidth / 2, c.clientHeight / 2, factor)
   }
 
   useEffect(() => {
     let alive = true
     const id = `mermaid-${++renderSeq}`
-    const resize = new ResizeObserver(() => pz.current && fit())
     void (async () => {
       const [{ default: mermaid }, { default: panzoom }] = await Promise.all([
         import("mermaid"),
@@ -93,16 +85,17 @@ export function Mermaid({
       if (!alive) return
       const el = stage.current!
       el.innerHTML = svg
+      // 宽度随画布收缩但不超过原始宽度, 高度按 viewBox 比例; 各类图表的 useMaxWidth 默认值不一, 统一在此设置.
       const svgEl = el.querySelector("svg")!
-      const { width, height } = svgEl.viewBox.baseVal
-      size.current = { w: width, h: height }
-      svgEl.style.maxWidth = "none"
-      svgEl.setAttribute("width", String(width))
-      svgEl.setAttribute("height", String(height))
+      svgEl.removeAttribute("height")
+      svgEl.setAttribute("width", "100%")
+      svgEl.style.maxWidth = `${svgEl.viewBox.baseVal.width}px`
       for (const g of svgEl.querySelectorAll("g.node, g.cluster")) {
         if (linkOf(g)) g.classList.add("pw-link")
       }
       setError("")
+      setReady(true)
+      // 每次渲染重建实例, 新实例以原始变换开始, 换主题后同样回到适应画布.
       pz.current = panzoom(el, {
         minZoom: 0.2,
         maxZoom: 5,
@@ -115,12 +108,9 @@ export function Mermaid({
           if (target) follow(target)
         },
       })
-      // 观察开始时与画布尺寸变化时都会适应画布.
-      resize.observe(canvas.current!)
     })()
     return () => {
       alive = false
-      resize.disconnect()
       pz.current?.dispose()
       pz.current = null
     }
@@ -138,12 +128,14 @@ export function Mermaid({
       <div
         ref={canvas}
         hidden={!!error}
-        className="mermaid-canvas group/canvas relative cursor-grab overflow-hidden rounded-lg border bg-muted/30 active:cursor-grabbing"
-        style={{ height: height || 160 }}
+        className={cn(
+          "mermaid-canvas group/canvas relative cursor-grab overflow-hidden rounded-lg border bg-muted/30 active:cursor-grabbing",
+          !ready && "h-40",
+        )}
       >
-        {!height && <Skeleton className="absolute inset-3" />}
-        <div ref={stage} className="w-max" />
-        {height > 0 && (
+        {!ready && <Skeleton className="absolute inset-3" />}
+        <div ref={stage} className="p-4 [&>svg]:mx-auto" />
+        {ready && (
           <div className="absolute right-2 bottom-2 flex gap-0.5 rounded-md border bg-background/90 p-0.5 opacity-0 shadow-xs backdrop-blur transition-opacity group-hover/canvas:opacity-100">
             <Button variant="ghost" size="icon-xs" aria-label="缩小" onClick={() => zoom(0.8)}>
               <MinusIcon />

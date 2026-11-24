@@ -19,7 +19,7 @@ import {
 } from "@/gen/pair/v1/pair_pb"
 import { DocContext, useNav, type Route } from "@/lib/nav"
 import { useDoc } from "@/lib/queries"
-import { anchorId, errorText, hasBlock, isNotFound, kindNames, progressLabels } from "@/lib/rpc"
+import { anchorId, errorText, hasBlock, isNotFound, kindNames, progressLabels, sentLabels } from "@/lib/rpc"
 
 export type Filters = { review: boolean; workaround: boolean }
 
@@ -107,7 +107,9 @@ export function DocView({ route, filters, feedback }: { route: Route; filters: F
               ))}
             </AnimatePresence>
           </div>
-          {visible.length === 0 && <p className="py-10 text-center text-xs text-muted-foreground">没有符合筛选的区块</p>}
+          {doc.sections.length > 0 && visible.length === 0 && (
+            <p className="py-10 text-center text-xs text-muted-foreground">没有符合筛选的区块</p>
+          )}
         </motion.div>
       </div>
     </DocContext>
@@ -192,7 +194,7 @@ function DecisionSummary({ doc, feedback }: { doc: Doc; feedback: Feedback[] }) 
             {pick ? (
               <>
                 <span className="font-medium">{pick.pickTitle || title(pick.pick)}</span>
-                <span className="text-muted-foreground">{pick.state === FeedbackState.STAGED ? "已暂存" : "已发送"}</span>
+                <span className="text-muted-foreground">{pick.state === FeedbackState.STAGED ? "已暂存" : sentLabels[pick.state]}</span>
                 {pick.note && <span className="text-muted-foreground">{pick.note}</span>}
               </>
             ) : (

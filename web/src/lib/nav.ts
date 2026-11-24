@@ -18,6 +18,11 @@ function parseHash(): Route | null {
   return { kind: kind as KindName, id, sec: sec || undefined }
 }
 
+/** routeHash 是路由在 location.hash 中的写法. */
+export function routeHash(r: Route): string {
+  return "#/" + [r.kind, r.id, r.sec].filter(Boolean).map((s) => encodeURIComponent(s!)).join("/")
+}
+
 let seq = 0
 
 export function useHashRoute() {
@@ -28,7 +33,7 @@ export function useHashRoute() {
     return () => window.removeEventListener("hashchange", onChange)
   }, [])
   const go = useCallback((r: Route, replace = false) => {
-    const hash = "#/" + [r.kind, r.id, r.sec].filter(Boolean).map((s) => encodeURIComponent(s!)).join("/")
+    const hash = routeHash(r)
     if (replace) history.replaceState(null, "", hash)
     else if (location.hash !== hash) history.pushState(null, "", hash)
     setRoute({ ...r, seq: ++seq })
@@ -46,16 +51,23 @@ export const NavContext = createContext<Nav | null>(null)
 
 export function useNav() {
   const nav = useContext(NavContext)!
-  /** openTarget 打开 doc、doc#sec 或 doc#container/item 形式的定位路径. */
-  const openTarget = useCallback(
-    (target: string) => {
+  /** resolve 把 doc、doc#sec 或 doc#container/item 形式的定位路径解析为路由, 文档不存在时返回 undefined. */
+  const resolve = useCallback(
+    (target: string): Route | undefined => {
       const [id, rest = ""] = target.replace(/^@/, "").split("#")
       const doc = nav.docs.find((d) => d.id === id && d.kind !== DocKind.DECISION)
-      if (doc) nav.go({ kind: kindName(doc.kind), id, sec: rest.split("/")[0] || undefined })
+      return doc && { kind: kindName(doc.kind), id, sec: rest.split("/")[0] || undefined }
     },
-    [nav],
+    [nav.docs],
   )
-  return { ...nav, openTarget }
+  const openTarget = useCallback(
+    (target: string) => {
+      const r = resolve(target)
+      if (r) nav.go(r)
+    },
+    [nav, resolve],
+  )
+  return { ...nav, resolve, openTarget }
 }
 
 /** DocCtx 是文档视图内各组件共享的当前文档与当前分支的反馈条目. */

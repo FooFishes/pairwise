@@ -1,7 +1,7 @@
 import { Code, ConnectError, createClient } from "@connectrpc/connect"
 import { createConnectTransport } from "@connectrpc/connect-web"
 
-import { DocKind, PairService, type Block } from "@/gen/pair/v1/pair_pb"
+import { DocKind, FeedbackState, PairService, type Block } from "@/gen/pair/v1/pair_pb"
 
 /** 同源调用常驻进程, 认证由会话 Cookie 完成. */
 export const client = createClient(
@@ -45,4 +45,10 @@ export const progressLabels: Record<string, string> = {
   pending: "待更新",
   updated: "已更新",
   no_change: "无需改动",
+}
+
+/** sentLabels 是已发送反馈在 Agent 读取前后的文案. */
+export const sentLabels: Partial<Record<FeedbackState, string>> = {
+  [FeedbackState.TRIGGERED]: "已发送",
+  [FeedbackState.DRAINED]: "已读取",
 }

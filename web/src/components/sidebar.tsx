@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { SearchIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, SearchIcon } from "lucide-react"
 import { cn } from "cn"
 
 import type { Filters } from "@/components/doc-view"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
@@ -13,7 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { DocKind, FeedbackKind, FeedbackState, type DocSummary, type Feedback } from "@/gen/pair/v1/pair_pb"
 import { useNav } from "@/lib/nav"
 import { useStatus } from "@/lib/queries"
-import { kindName } from "@/lib/rpc"
+import { kindName, sentLabels } from "@/lib/rpc"
 
 const groups = [
   [DocKind.MODULE, "模块"],
@@ -90,19 +91,19 @@ export function Sidebar({
       <div className="flex h-11 shrink-0 items-center gap-2 px-3">
         <span className="truncate text-[13px] font-semibold">{root}</span>
         <span className="truncate text-xs text-muted-foreground">{status.data?.branch}</span>
-        <AnimatePresence>
-          {!connected && (
-            <motion.span
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="ml-auto shrink-0 text-xs text-destructive"
-            >
-              未连接
-            </motion.span>
-          )}
-        </AnimatePresence>
       </div>
+      <AnimatePresence initial={false}>
+        {!connected && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="shrink-0 overflow-hidden"
+          >
+            <Recover />
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="px-2 pb-2">
         <InputGroup className="bg-background/60">
           <InputGroupAddon>
@@ -164,6 +165,27 @@ export function Sidebar({
   )
 }
 
+// 常驻进程重启后端口与会话都会变化, 旧页面无法自行恢复, 需重新打开带令牌的地址.
+const recoverCmd = "pair serve --open"
+
+function Recover() {
+  const [copied, setCopied] = useState(false)
+  const copy = () =>
+    void navigator.clipboard.writeText(recoverCmd).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  return (
+    <div className="mx-2 mb-2 flex h-7 items-center gap-2 rounded-md border bg-background/60 pr-0.5 pl-2 text-xs">
+      <span className="shrink-0 text-destructive">未连接</span>
+      <code className="min-w-0 flex-1 truncate font-mono text-[11px] select-all">{recoverCmd}</code>
+      <Button variant="ghost" size="icon-xs" aria-label="复制" onClick={copy}>
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </Button>
+    </div>
+  )
+}
+
 function FilterSwitch({ id, label, checked, onChange }: { id: string; label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <Field orientation="horizontal">
@@ -198,7 +220,7 @@ function DocItem({ doc, feedback, active }: { doc: DocSummary; feedback: Feedbac
       )}
     >
       <span className="min-w-0 flex-1 truncate">{doc.title || doc.id}</span>
-      {pick && <Badge variant="outline">{pick.state === FeedbackState.STAGED ? "已选" : "已发送"}</Badge>}
+      {pick && <Badge variant="outline">{pick.state === FeedbackState.STAGED ? "已选" : sentLabels[pick.state]}</Badge>}
       {counts.map(
         ([field, variant, label]) =>
           doc[field] > 0 && (
