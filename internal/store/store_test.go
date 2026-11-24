@@ -284,59 +284,69 @@ func TestBaseEviction(t *testing.T) {
 
 func TestSessionsAndBindings(t *testing.T) {
 	s := open(t, t.TempDir())
-	sess := must[*pairv1.Session](t)
+	sess := must[*Session](t)
+	binds := must[[]*Binding](t)
 
-	a := sess(s.UpsertSession("host-a", "running", []string{"env_file"}))
-	if len(a.ShortCode) != 4 || a.UpdatedAt == 0 {
-		t.Fatalf("session = %v", a)
+	a := sess(s.UpdateSession("host-a", func(v *Session) { v.EnvFile = true }))
+	if len(a.Code) != 4 || a.State != "idle" || !a.EnvFile || a.UpdatedAt == 0 {
+		t.Fatalf("session = %+v", a)
 	}
-	// state 为空、capabilities 为 nil 时保留原值, 短码不变.
-	a2 := sess(s.UpsertSession("host-a", "", nil))
-	if a2.ShortCode != a.ShortCode || a2.State != "running" || !slices.Equal(a2.Capabilities, []string{"env_file"}) {
-		t.Fatalf("upsert = %v", a2)
+	a2 := sess(s.UpdateSession("host-a", func(v *Session) { v.State, v.Unverified = "running", "x" }))
+	if a2.Code != a.Code || !a2.EnvFile || a2.State != "running" || a2.Unverified != "x" {
+		t.Fatalf("update = %+v", a2)
 	}
-	if got := sess(s.Session(a.ShortCode)); got.Id != "host-a" {
-		t.Fatalf("按短码查找 = %v", got)
-	}
-	if got := must[[]*pairv1.Session](t)(s.Sessions()); len(got) != 1 {
-		t.Fatalf("sessions = %v", got)
+	if got := sess(s.Session(a.Code)); got.ID != "host-a" || got.Unverified != "x" {
+		t.Fatalf("按短码查找 = %+v", got)
 	}
 
-	b := must[*Binding](t)(s.AddBinding(&Binding{Branch: "main", DocID: "discover", Sections: []string{"tabs"}, Base: "0123456789ab"}))
-	if b.ID != "b-1" {
-		t.Fatalf("bind id = %s", b.ID)
+	// 一次 bind 的多个文档共用 ID; 未关联会话的绑定不计入 ActiveBindings, 关联后同会话同文档以最新一次为准.
+	old := must[string](t)(s.AddBindings([]*Binding{{SessionID: "host-a", Branch: "main", DocID: "discover", Base: "000000000000"}}))
+	id := must[string](t)(s.AddBindings([]*Binding{
+		{Branch: "main", DocID: "discover", Sections: []string{"tabs"}, Base: "0123456789ab"},
+		{Branch: "main", DocID: "pick", Base: "0123456789ab"},
+	}))
+	if old != "b-1" || id != "b-2" {
+		t.Fatalf("bind id = %s, %s", old, id)
 	}
-	if got := must[[]*Binding](t)(s.ActiveBindings("main")); len(got) != 0 {
-		t.Fatalf("未关联会话的绑定计入了 ActiveBindings: %v", got)
+	if got := binds(s.ActiveBindings("main")); len(got) != 1 || got[0].ID != old {
+		t.Fatalf("active = %+v", got)
 	}
-	if err := s.AttachBinding(b.ID, "host-a"); err != nil {
+	if err := s.AttachBinding(id, "host-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AttachBinding(b.ID, "host-b"); !errors.Is(err, ErrNotFound) {
+	if err := s.AttachBinding(id, "host-b"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("改挂其他会话: %v", err)
 	}
-	if got := must[[]*Binding](t)(s.Bindings("host-a")); len(got) != 1 || got[0].Sections[0] != "tabs" {
-		t.Fatalf("bindings = %v", got)
+	got := binds(s.Bindings("host-a"))
+	if len(got) != 2 || got[0].ID != id || got[0].Sections[0] != "tabs" || got[1].DocID != "pick" {
+		t.Fatalf("bindings = %+v", got)
+	}
+	if ok := must[bool](t)(s.AdvanceBinding("host-a", "discover", "fedcba987654")); !ok {
+		t.Fatal("未推进绑定基准")
+	}
+	if got := binds(s.Bindings("host-a")); got[0].Base != "fedcba987654" || got[1].Base != "0123456789ab" {
+		t.Fatalf("推进后 bindings = %+v", got)
+	}
+	// 超过 24 小时没有活动的会话, 以及未登记会话的旧绑定, 都不再计入 ActiveBindings.
+	must[string](t)(s.AddBindings([]*Binding{{SessionID: "manual", Branch: "main", DocID: "pick", Base: "0123456789ab"}}))
+	if got := binds(s.ActiveBindings("main")); len(got) != 3 {
+		t.Fatalf("active = %+v", got)
+	}
+	old24 := time.Now().Add(-25 * time.Hour).UnixMilli()
+	if _, err := s.db.Exec(`UPDATE sessions SET updated_at = ?`, old24); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE bindings SET created_at = ? WHERE session_id = 'manual'`, old24); err != nil {
+		t.Fatal(err)
+	}
+	if got := binds(s.ActiveBindings("main")); len(got) != 0 {
+		t.Fatalf("不活跃会话的绑定仍计入: %+v", got)
 	}
 	if err := s.InvalidateBindings("feature"); err != nil {
 		t.Fatal(err)
 	}
-	if got := must[*Binding](t)(s.Binding(b.ID)); !got.Stale {
-		t.Fatalf("切换分支后绑定未失效: %v", got)
-	}
-
-	turn := must[*Turn](t)
-	if err := s.SaveTurn(&Turn{SessionID: "host-a", Drained: []string{"q1"}, Asked: true}); err != nil {
-		t.Fatal(err)
-	}
-	if got := turn(s.Turn("host-a")); !got.Asked || got.Drained[0] != "q1" {
-		t.Fatalf("turn = %v", got)
-	}
-	if err := s.ResetTurn("host-a"); err != nil {
-		t.Fatal(err)
-	}
-	if got := turn(s.Turn("host-a")); got.SessionID != "host-a" || got.Asked || got.Drained != nil {
-		t.Fatalf("reset turn = %v", got)
+	if got := binds(s.Bindings("host-a")); len(got) != 0 {
+		t.Fatalf("切换分支后绑定未失效: %+v", got)
 	}
 
 	for _, r := range []string{"修复返回栈", "修复返回栈", "调样式"} {
@@ -347,11 +357,35 @@ func TestSessionsAndBindings(t *testing.T) {
 	if got := must[[]string](t)(s.PendingSkips()); !slices.Equal(got, []string{"修复返回栈", "调样式"}) {
 		t.Fatalf("skips = %v", got)
 	}
-	if err := s.ConsumeSkips(); err != nil {
+	// 只清除写入了提交信息的原因.
+	if err := s.ConsumeSkips([]string{"修复返回栈", "其他"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := must[[]string](t)(s.PendingSkips()); len(got) != 0 {
+	if got := must[[]string](t)(s.PendingSkips()); !slices.Equal(got, []string{"调样式"}) {
 		t.Fatalf("消费后 skips = %v", got)
+	}
+}
+
+// TestUpdateTurn 验证并发的回合修改各自在单个事务内读改写, 互不覆盖.
+func TestUpdateTurn(t *testing.T) {
+	s := open(t, t.TempDir())
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			if _, err := s.UpdateTurn("host-a", func(tu *Turn) { tu.Modified = append(tu.Modified, fmt.Sprint(i)) }); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := must[*Turn](t)(s.Turn("host-a")); len(got.Modified) != 16 || got.SessionID != "host-a" {
+		t.Fatalf("turn = %+v", got)
+	}
+	if err := s.ResetTurn("host-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := must[*Turn](t)(s.Turn("host-a")); got.Modified != nil {
+		t.Fatalf("reset turn = %+v", got)
 	}
 }
 

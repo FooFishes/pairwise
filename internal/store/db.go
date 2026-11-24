@@ -68,6 +68,12 @@ CREATE TABLE events (
 	seq INTEGER PRIMARY KEY AUTOINCREMENT,
 	data BLOB NOT NULL
 );
+`, `
+ALTER TABLE sessions ADD COLUMN env_file INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN unverified TEXT NOT NULL DEFAULT '';
+-- 一次 bind 涉及的各文档共用 bind_id; 此前每行单独编号为 'b-' || seq.
+ALTER TABLE bindings ADD COLUMN bind_id TEXT NOT NULL DEFAULT '';
+UPDATE bindings SET bind_id = 'b-' || seq;
 `}
 
 func migrate(tx *sql.Tx) error {

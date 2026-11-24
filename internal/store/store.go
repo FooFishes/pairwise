@@ -346,21 +346,33 @@ func (s *Store) transit(set, cond string, args ...any) ([]*pairv1.Feedback, erro
 
 // ---------- 会话 ----------
 
-// Binding 是会话对某个文档的绑定.
+// Session 是宿主会话.
+type Session struct {
+	ID string
+	// Code 是 4 位短码, --session 可以用它代替会话 ID.
+	Code         string
+	State        string
+	Capabilities []string
+	// EnvFile 表示最近一次 session-start 时宿主提供了会话环境文件, 会话中的命令已带 PAIR_SESSION_ID.
+	EnvFile bool
+	// Unverified 是 before-stop 第二次放行时仍未解决的拦截原因, 新回合开始时清空.
+	Unverified string
+	UpdatedAt  int64
+}
+
+// Binding 是会话对某个文档的绑定. 一次 bind 涉及的各文档共用一个 ID.
 type Binding struct {
 	ID        string
 	SessionID string
 	Branch    string
 	DocID     string
 	// Sections 为空表示绑定整个文档.
-	Sections  []string
-	Base      string
-	Preserve  string
-	Stale     bool
-	CreatedAt int64
+	Sections []string
+	Base     string
+	Preserve string
 }
 
-// Turn 是会话当前回合的累计状态, 供 before-stop 判断.
+// Turn 是会话当前回合的累计状态, 供 before-tool 与 before-stop 判断.
 type Turn struct {
 	SessionID string
 	// Drained 是本回合读取过的反馈 ID.
@@ -370,85 +382,104 @@ type Turn struct {
 	Asked   bool
 	// Modified 是本回合改动过的源码相对路径.
 	Modified []string
-	Skipped  string
+	// Skipped 是本回合 skip-update 登记的原因.
+	Skipped string
+	// Hinted 是本回合已提示过 pair bind 的模块 ID.
+	Hinted []string
 	// Blocked 是本回合已拦截过的原因哈希.
 	Blocked []string
 }
 
-const selectSession = `SELECT id, code, state, capabilities, updated_at FROM sessions `
+const selectSession = `SELECT id, code, state, capabilities, env_file, unverified, updated_at FROM sessions `
 
-func scanSession(sc scanner) (*pairv1.Session, error) {
-	v := &pairv1.Session{}
-	return v, sc.Scan(&v.Id, &v.ShortCode, &v.State, jsonCol{&v.Capabilities}, &v.UpdatedAt)
+func scanSession(sc scanner) (*Session, error) {
+	v := &Session{}
+	return v, sc.Scan(&v.ID, &v.Code, &v.State, jsonCol{&v.Capabilities}, &v.EnvFile, &v.Unverified, &v.UpdatedAt)
 }
 
-// UpsertSession 创建或更新会话并刷新活跃时间; 新会话分配一个 4 位短码.
-// 更新已有会话时, state 为空或 capabilities 为 nil 表示保留原值.
-// 返回的会话不含绑定信息, 绑定由 Bindings 查询.
-func (s *Store) UpsertSession(id, state string, capabilities []string) (*pairv1.Session, error) {
-	var caps any
-	if capabilities != nil {
-		caps = jsonCol{capabilities}
-	}
-	var sess *pairv1.Session
+// UpdateSession 在一个事务中读取会话、交给 f 修改后写回, 并刷新活跃时间.
+// 会话不存在时以 id 新建, 初始状态为 idle, 并分配一个 4 位短码.
+func (s *Store) UpdateSession(id string, f func(*Session)) (*Session, error) {
+	var sess *Session
 	err := s.tx(func(tx *sql.Tx) error {
-		at := now()
-		res, err := tx.Exec(`UPDATE sessions SET state = coalesce(nullif(?, ''), state), capabilities = coalesce(?, capabilities), updated_at = ?
-			WHERE id = ?`, state, caps, at, id)
+		var err error
+		sess, err = one(tx, scanSession, selectSession+"WHERE id = ?", id)
+		created := errors.Is(err, ErrNotFound)
+		if created {
+			sess, err = &Session{ID: id, State: "idle"}, nil
+		}
 		if err != nil {
 			return err
 		}
+		f(sess)
+		sess.UpdatedAt = now()
+		if !created {
+			_, err = tx.Exec(`UPDATE sessions SET state = ?, capabilities = ?, env_file = ?, unverified = ?, updated_at = ? WHERE id = ?`,
+				sess.State, jsonCol{sess.Capabilities}, sess.EnvFile, sess.Unverified, sess.UpdatedAt, id)
+			return err
+		}
 		// 短码撞上已有会话时 INSERT OR IGNORE 不插入, 换一个重试.
-		n, _ := res.RowsAffected()
-		for n == 0 {
-			res, err := tx.Exec(`INSERT OR IGNORE INTO sessions (id, code, state, capabilities, updated_at) VALUES (?, ?, ?, ?, ?)`,
-				id, strings.ToLower(rand.Text()[:4]), state, jsonCol{capabilities}, at)
+		for n := int64(0); n == 0; {
+			sess.Code = strings.ToLower(rand.Text()[:4])
+			res, err := tx.Exec(`INSERT OR IGNORE INTO sessions (id, code, state, capabilities, env_file, unverified, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				id, sess.Code, sess.State, jsonCol{sess.Capabilities}, sess.EnvFile, sess.Unverified, sess.UpdatedAt)
 			if err != nil {
 				return err
 			}
 			n, _ = res.RowsAffected()
 		}
-		sess, err = one(tx, scanSession, selectSession+"WHERE id = ?", id)
-		return err
+		return nil
 	})
 	return sess, err
 }
 
 // Session 按 ID 或短码查找会话.
-func (s *Store) Session(idOrCode string) (*pairv1.Session, error) {
+func (s *Store) Session(idOrCode string) (*Session, error) {
 	return one(s.db, scanSession, selectSession+"WHERE id = ? OR code = ?", idOrCode, idOrCode)
 }
 
 // Sessions 按活跃时间倒序列出最近 24 小时内活跃的会话.
-func (s *Store) Sessions() ([]*pairv1.Session, error) {
+func (s *Store) Sessions() ([]*Session, error) {
 	return list(s.db, scanSession, selectSession+"WHERE updated_at >= ? ORDER BY updated_at DESC",
 		time.Now().Add(-sessionActive).UnixMilli())
 }
 
-const selectBinding = `SELECT 'b-' || seq, session_id, branch, doc_id, sections, base, preserve, stale, created_at FROM bindings `
+const selectBinding = `SELECT bind_id, session_id, branch, doc_id, sections, base, preserve FROM bindings `
 
 func scanBinding(sc scanner) (*Binding, error) {
 	b := &Binding{}
-	return b, sc.Scan(&b.ID, &b.SessionID, &b.Branch, &b.DocID, jsonCol{&b.Sections}, &b.Base, &b.Preserve, &b.Stale, &b.CreatedAt)
+	return b, sc.Scan(&b.ID, &b.SessionID, &b.Branch, &b.DocID, jsonCol{&b.Sections}, &b.Base, &b.Preserve)
 }
 
-// AddBinding 记录绑定并分配 bind_id, 返回带 ID 与创建时间的副本.
-func (s *Store) AddBinding(b *Binding) (*Binding, error) {
-	out := *b
-	out.Stale, out.CreatedAt = false, now()
-	res, err := s.db.Exec(`INSERT INTO bindings (session_id, branch, doc_id, sections, base, preserve, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		out.SessionID, out.Branch, out.DocID, jsonCol{out.Sections}, out.Base, out.Preserve, out.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	seq, _ := res.LastInsertId()
-	out.ID = "b-" + strconv.FormatInt(seq, 10)
-	return &out, nil
+// AddBindings 在一个事务中记录一次 bind 涉及的全部文档, 返回它们共用的 ID "b-<首行序号>".
+// 关联了会话时, 该会话此前对同一文档的绑定随之失效, 以最新一次为准.
+func (s *Store) AddBindings(bs []*Binding) (string, error) {
+	var id string
+	err := s.tx(func(tx *sql.Tx) error {
+		for _, b := range bs {
+			res, err := tx.Exec(`INSERT INTO bindings (bind_id, session_id, branch, doc_id, sections, base, preserve, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, b.SessionID, b.Branch, b.DocID, jsonCol{b.Sections}, b.Base, b.Preserve, now())
+			if err != nil {
+				return err
+			}
+			if id == "" {
+				seq, _ := res.LastInsertId()
+				id = "b-" + strconv.FormatInt(seq, 10)
+				if _, err := tx.Exec(`UPDATE bindings SET bind_id = ? WHERE seq = ?`, id, seq); err != nil {
+					return err
+				}
+			}
+		}
+		return supersede(tx, id)
+	})
+	return id, err
 }
 
-// Binding 按 bind_id 查找绑定.
-func (s *Store) Binding(id string) (*Binding, error) {
-	return one(s.db, scanBinding, selectBinding+"WHERE 'b-' || seq = ?", id)
+// supersede 使一次 bind 所属会话此前对同一文档的其他有效绑定失效; 未关联会话的绑定不受影响.
+func supersede(tx *sql.Tx, bindID string) error {
+	_, err := tx.Exec(`UPDATE bindings SET stale = 1 WHERE NOT stale AND bind_id <> ?1 AND (session_id, doc_id) IN
+		(SELECT session_id, doc_id FROM bindings WHERE bind_id = ?1 AND session_id <> '' AND NOT stale)`, bindID)
+	return err
 }
 
 // Bindings 按创建顺序返回会话的有效绑定.
@@ -457,14 +488,42 @@ func (s *Store) Bindings(sessionID string) ([]*Binding, error) {
 }
 
 // ActiveBindings 按创建顺序返回分支上已关联会话的全部有效绑定.
+// 宿主崩溃时收不到会话结束, 与会话列表一致, 会话 (未登记时按绑定本身) 超过 24 小时没有活动的绑定不再计入.
 func (s *Store) ActiveBindings(branch string) ([]*Binding, error) {
-	return list(s.db, scanBinding, selectBinding+"WHERE branch = ? AND session_id <> '' AND NOT stale ORDER BY seq", branch)
+	return list(s.db, scanBinding, selectBinding+`LEFT JOIN sessions ON sessions.id = session_id
+WHERE branch = ? AND session_id <> '' AND NOT stale AND COALESCE(sessions.updated_at, created_at) >= ? ORDER BY seq`,
+		branch, time.Now().Add(-sessionActive).UnixMilli())
 }
 
-// AttachBinding 把未关联会话的绑定关联到会话, 供 after-tool 兜底.
-// 已关联到同一会话时视为成功; 绑定不存在或已属于其他会话时返回 ErrNotFound.
+// AttachBinding 把一次 bind 中尚未关联会话的绑定关联到会话, 供 after-tool 兜底; 会话此前对同一文档的绑定随之失效.
+// 已关联到同一会话时视为成功; 绑定不存在、已失效或已属于其他会话时返回 ErrNotFound.
 func (s *Store) AttachBinding(bindID, sessionID string) error {
-	return s.execOne(`UPDATE bindings SET session_id = ? WHERE 'b-' || seq = ? AND session_id IN ('', ?)`, sessionID, bindID, sessionID)
+	return s.tx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`UPDATE bindings SET session_id = ? WHERE bind_id = ? AND session_id IN ('', ?) AND NOT stale`, sessionID, bindID, sessionID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return supersede(tx, bindID)
+	})
+}
+
+// AdvanceBinding 把会话对文档的有效绑定基准推进到 base, 报告是否有这样的绑定.
+func (s *Store) AdvanceBinding(sessionID, docID, base string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE bindings SET base = ? WHERE session_id = ? AND doc_id = ? AND NOT stale`, base, sessionID, docID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ReleaseBindings 在会话结束时使其全部绑定失效.
+func (s *Store) ReleaseBindings(sessionID string) error {
+	_, err := s.db.Exec(`UPDATE bindings SET stale = 1 WHERE session_id = ? AND NOT stale`, sessionID)
+	return err
 }
 
 // InvalidateBindings 把不属于 branch 的绑定标记为失效.
@@ -475,19 +534,33 @@ func (s *Store) InvalidateBindings(branch string) error {
 
 // Turn 返回会话当前回合的状态, 不存在时返回空回合.
 func (s *Store) Turn(sessionID string) (*Turn, error) {
+	return readTurn(s.db, sessionID)
+}
+
+// UpdateTurn 在一个事务中读取会话当前回合的状态、交给 f 修改后写回, 返回修改后的回合.
+// f 在写事务中执行, 不能再访问存储.
+func (s *Store) UpdateTurn(sessionID string, f func(*Turn)) (*Turn, error) {
+	var t *Turn
+	err := s.tx(func(tx *sql.Tx) error {
+		var err error
+		if t, err = readTurn(tx, sessionID); err != nil {
+			return err
+		}
+		f(t)
+		_, err = tx.Exec(`REPLACE INTO turns (session_id, data) VALUES (?, ?)`, sessionID, jsonCol{t})
+		return err
+	})
+	return t, err
+}
+
+func readTurn(q querier, sessionID string) (*Turn, error) {
 	t := &Turn{}
-	err := s.db.QueryRow(`SELECT data FROM turns WHERE session_id = ?`, sessionID).Scan(jsonCol{t})
+	err := q.QueryRow(`SELECT data FROM turns WHERE session_id = ?`, sessionID).Scan(jsonCol{t})
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	t.SessionID = sessionID
 	return t, nil
-}
-
-// SaveTurn 保存回合状态.
-func (s *Store) SaveTurn(t *Turn) error {
-	_, err := s.db.Exec(`REPLACE INTO turns (session_id, data) VALUES (?, ?)`, t.SessionID, jsonCol{t})
-	return err
 }
 
 // ResetTurn 在新回合开始时清空会话的回合状态.
@@ -509,9 +582,9 @@ func (s *Store) PendingSkips() ([]string, error) {
 	return list(s.db, scanString, `SELECT reason FROM skips ORDER BY rowid`)
 }
 
-// ConsumeSkips 清空待用的跳过原因.
-func (s *Store) ConsumeSkips() error {
-	_, err := s.db.Exec(`DELETE FROM skips`)
+// ConsumeSkips 清除已写入提交信息的跳过原因; 其余原因 (如编辑提交信息期间新登记的) 留待下次提交.
+func (s *Store) ConsumeSkips(reasons []string) error {
+	_, err := s.db.Exec(`DELETE FROM skips WHERE reason IN (SELECT value FROM json_each(?))`, jsonCol{reasons})
 	return err
 }
 
