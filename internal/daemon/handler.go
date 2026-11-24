@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -35,7 +38,7 @@ const heartbeat = 15 * time.Second
 // newHandler 组装常驻进程的全部 HTTP 端点. Unix Socket 与 TCP 两个监听共用它,
 // 只有来自 TCP 监听的请求经过 guard 校验.
 func newHandler(svc Service, port int) http.Handler {
-	rpc := connect.NewServer()
+	rpc := connect.NewServer(keepErrorMessage)
 	pairv1connect.RegisterPairServiceHandler(rpc, svc)
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, rpc)
@@ -50,6 +53,19 @@ func newHandler(svc Service, port int) http.Handler {
 	// 不带方法限定: "GET /" 与 Connect 挂载的 "/pair.v1.PairService/" 互不包含, 注册时会冲突.
 	mux.Handle("/", ui(web.FS()))
 	return g.wrap(mux)
+}
+
+// keepErrorMessage 把业务实现返回的普通错误 (I/O、git 调用失败等) 转为带原因的 CodeInternal 错误并记入日志.
+// Connect 会抹去非 *connect.Error 的错误信息, 否则 CLI 只能输出 "unknown", 无从排查.
+func keepErrorMessage(next connect.ServerFunc) connect.ServerFunc {
+	return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+		err := next(ctx, spec, stream)
+		if err == nil || errors.As(err, new(*connect.Error)) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		slog.Error("处理请求失败", "procedure", spec.Procedure, "err", err)
+		return connect.NewError(connect.CodeInternal, "常驻进程内部错误: "+err.Error()).WithCause(err)
+	}
 }
 
 // guard 校验界面侧请求: Host 与 Origin 必须是本机地址, 并持有一次性令牌换来的会话 Cookie.

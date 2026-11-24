@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 
 	pairv1 "github.com/FooFishes/pairwise/gen/pair/v1"
 	"github.com/FooFishes/pairwise/gen/pair/v1/pairv1connect"
@@ -30,6 +34,11 @@ type stubService struct {
 
 func (s *stubService) Ping(context.Context, *pairv1.PingRequest) (*pairv1.PingResponse, error) {
 	return &pairv1.PingResponse{}, nil
+}
+
+// Status 模拟业务实现返回的普通错误 (非 *connect.Error).
+func (s *stubService) Status(context.Context, *pairv1.StatusRequest) (*pairv1.StatusResponse, error) {
+	return nil, errors.New("磁盘已满")
 }
 
 func (s *stubService) Subscribe() (<-chan *pairv1.Event, func()) { return s.live, func() {} }
@@ -217,5 +226,18 @@ func TestEvents(t *testing.T) {
 				t.Errorf("推送序号 = %v, 期望 %v\n%s", ids, tt.want, body)
 			}
 		})
+	}
+}
+
+// TestKeepErrorMessage 验证普通错误的原因传到 CLI, 而不是被 Connect 抹成 "unknown".
+func TestKeepErrorMessage(t *testing.T) {
+	_, unix := serve(t, &stubService{})
+	c := pairv1connect.NewPairServiceClient(connect.NewClient(connecthttp.NewTransport(unix, "http://pair")))
+	_, err := c.Status(context.Background(), &pairv1.StatusRequest{})
+	if connect.CodeOf(err) != connect.CodeInternal || !strings.Contains(err.Error(), "常驻进程内部错误: 磁盘已满") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := c.Drain(context.Background(), &pairv1.DrainRequest{}); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("业务错误码被改写: %v", err)
 	}
 }
