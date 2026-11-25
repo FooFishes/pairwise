@@ -53,9 +53,12 @@ stdout '^  受影响目标: discover#list, pick-shop#list$'
 stdout '--resolves shop-policy --no-change'
 ! stdout '暂未确认'
 
-# --wait 返回即视为已读取, drain 不再重复输出.
+# --wait 返回即视为已读取, drain 不再当作新反馈输出, 但仍列在已读取未闭环中, 供中断后的新会话接手.
 pair drain
-stdout '暂无已发送的开发者反馈'
+stdout '^暂无已发送的开发者反馈$'
+stdout '^此前已读取尚未闭环 \(1\):$'
+stdout '^- \[id: shop-policy\] 选择方案 opt-b \(全部保留\)$'
+stdout '--resolves shop-policy --no-change'
 pair status
 stdout '反馈: 已读取待闭环 1'
 stdout '待确认问题: shop-policy'

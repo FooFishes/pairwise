@@ -380,6 +380,8 @@ message DrainRequest {
 
 message DrainResponse {
   repeated Feedback items = 1;
+  // 此前已读取但尚未闭环的反馈, 不含本次读取的条目; 读取它们的会话中断后由后续会话接手闭环.
+  repeated Feedback unresolved = 2;
 }
 
 message StageDecideRequest {

@@ -164,9 +164,17 @@ func (w *Workspace) Drain(ctx context.Context, req *pairv1.DrainRequest) (*pairv
 	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
 		return nil, err
 	}
+	// 先取出此前已读取未闭环的条目, 与本次读取的分开返回: 没有 Hook 时新会话只能从这里得知上一会话留下的反馈.
+	unresolved, err := w.store.ListFeedback(branch, pairv1.FeedbackState_FEEDBACK_STATE_DRAINED)
+	if err != nil {
+		return nil, err
+	}
 	items, err := w.store.Drain(branch, req.SessionId)
 	if err != nil {
 		return nil, err
+	}
+	for _, f := range unresolved {
+		enrich(ix, f)
 	}
 	var ids []string
 	for _, f := range items {
@@ -177,7 +185,7 @@ func (w *Workspace) Drain(ctx context.Context, req *pairv1.DrainRequest) (*pairv
 		w.emit(&pairv1.Event{Type: evDrained, Branch: branch, Ids: ids, SessionId: req.SessionId})
 	}
 	err = w.touchTurn(req.SessionId, func(tu *store.Turn) { tu.Drained = appendNew(tu.Drained, ids...) })
-	return &pairv1.DrainResponse{Items: items}, err
+	return &pairv1.DrainResponse{Items: items, Unresolved: unresolved}, err
 }
 
 // StageDecide 暂存对问题的方案选择.

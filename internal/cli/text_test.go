@@ -36,6 +36,20 @@ func TestText(t *testing.T) {
 				"- fb-3: 执行 `pair update discover#tabs --base <hash> --resolves fb-3`\n",
 		},
 		{
+			name: "drain 没有新反馈时仍列出此前已读取未闭环的反馈",
+			got:  drainText(&pairv1.DrainResponse{Unresolved: []*pairv1.Feedback{decision}}),
+			want: "暂无已发送的开发者反馈\n" +
+				"此前已读取尚未闭环 (1):\n" +
+				"- [id: closed-shop-policy] 选择方案 opt-a (按场景分流)\n" +
+				"  受影响目标: discover#list, pick-shop#list\n" +
+				"  目标进度: discover#list 已更新; pick-shop#list 待更新\n" +
+				"\n" +
+				"下一步要求: 请按上述结论修改业务代码, 随后逐条闭环 (base 由 `pair show <module#sec>` 获取):\n" +
+				"- closed-shop-policy: 对每个受影响目标执行 `pair update <module#sec> --base <hash> --resolves closed-shop-policy` " +
+				"(某目标确认无需改动时改用 `pair update <module#sec> --resolves closed-shop-policy --no-change \"<原因>\"`); " +
+				"全部目标更新或显式结案后工具将自动删除 `.pair/decisions/closed-shop-policy.md`\n",
+		},
+		{
 			name: "ask --wait 超时按默认方案继续",
 			got:  waitText(&pairv1.WaitDecisionResponse{DefaultOption: "opt-a", TimeoutSecs: 90}),
 			want: "暂未确认, 请先按 default_option opt-a 继续执行, 问题已保留在队列中 (已等待 90 秒)\n" +

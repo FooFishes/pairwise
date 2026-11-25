@@ -368,15 +368,29 @@ func resolveHint(f *pairv1.Feedback) string {
 }
 
 func drainText(res *pairv1.DrainResponse) string {
-	if len(res.Items) == 0 {
+	if len(res.Items) == 0 && len(res.Unresolved) == 0 {
 		return "暂无已发送的开发者反馈\n下一步: 继续当前任务\n"
 	}
 	var t text
-	t.line("已读取 %d 条开发者确认反馈:", len(res.Items))
 	var hints []string
-	for _, f := range res.Items {
-		t.feedback(f)
-		hints = append(hints, resolveHint(f))
+	if len(res.Items) == 0 {
+		t.line("暂无已发送的开发者反馈")
+	} else {
+		t.line("已读取 %d 条开发者确认反馈:", len(res.Items))
+		for _, f := range res.Items {
+			t.feedback(f)
+			hints = append(hints, resolveHint(f))
+		}
+	}
+	if len(res.Unresolved) > 0 {
+		t.line("此前已读取尚未闭环 (%d):", len(res.Unresolved))
+		for _, f := range res.Unresolved {
+			t.feedback(f)
+			if len(f.Progress) > 0 {
+				t.line("  目标进度: %s", progressText(f.Targets, f.Progress))
+			}
+			hints = append(hints, resolveHint(f))
+		}
 	}
 	t.line("")
 	t.list("下一步要求: 请按上述结论修改业务代码, 随后逐条闭环 (base 由 `pair show <module#sec>` 获取):", hints)

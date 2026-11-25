@@ -2847,8 +2847,10 @@ func (x *DrainRequest) GetSessionId() string {
 }
 
 type DrainResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Items         []*Feedback            `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Items []*Feedback            `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	// 此前已读取但尚未闭环的反馈, 不含本次读取的条目; 读取它们的会话中断后由后续会话接手闭环.
+	Unresolved    []*Feedback `protobuf:"bytes,2,rep,name=unresolved,proto3" json:"unresolved,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2886,6 +2888,13 @@ func (*DrainResponse) Descriptor() ([]byte, []int) {
 func (x *DrainResponse) GetItems() []*Feedback {
 	if x != nil {
 		return x.Items
+	}
+	return nil
+}
+
+func (x *DrainResponse) GetUnresolved() []*Feedback {
+	if x != nil {
+		return x.Unresolved
 	}
 	return nil
 }
@@ -4628,9 +4637,12 @@ const file_pair_v1_pair_proto_rawDesc = "" +
 	"\ftimeout_secs\x18\x04 \x01(\x05R\vtimeoutSecs\"-\n" +
 	"\fDrainRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"8\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"k\n" +
 	"\rDrainResponse\x12'\n" +
-	"\x05items\x18\x01 \x03(\v2\x11.pair.v1.FeedbackR\x05items\"]\n" +
+	"\x05items\x18\x01 \x03(\v2\x11.pair.v1.FeedbackR\x05items\x121\n" +
+	"\n" +
+	"unresolved\x18\x02 \x03(\v2\x11.pair.v1.FeedbackR\n" +
+	"unresolved\"]\n" +
 	"\x12StageDecideRequest\x12\x1f\n" +
 	"\vdecision_id\x18\x01 \x01(\tR\n" +
 	"decisionId\x12\x12\n" +
@@ -4911,69 +4923,70 @@ var file_pair_v1_pair_proto_depIdxs = []int32{
 	14, // 32: pair.v1.AskResponse.decision:type_name -> pair.v1.Decision
 	16, // 33: pair.v1.WaitDecisionResponse.feedback:type_name -> pair.v1.Feedback
 	16, // 34: pair.v1.DrainResponse.items:type_name -> pair.v1.Feedback
-	16, // 35: pair.v1.StageDecideResponse.item:type_name -> pair.v1.Feedback
-	16, // 36: pair.v1.StageNoteResponse.item:type_name -> pair.v1.Feedback
-	5,  // 37: pair.v1.ListFeedbackRequest.states:type_name -> pair.v1.FeedbackState
-	16, // 38: pair.v1.ListFeedbackResponse.items:type_name -> pair.v1.Feedback
-	16, // 39: pair.v1.TriggerResponse.items:type_name -> pair.v1.Feedback
-	57, // 40: pair.v1.BindResponse.docs:type_name -> pair.v1.BoundDoc
-	57, // 41: pair.v1.Session.bindings:type_name -> pair.v1.BoundDoc
-	63, // 42: pair.v1.ListSessionsResponse.sessions:type_name -> pair.v1.Session
-	17, // 43: pair.v1.PairService.Ping:input_type -> pair.v1.PingRequest
-	19, // 44: pair.v1.PairService.Status:input_type -> pair.v1.StatusRequest
-	21, // 45: pair.v1.PairService.ListDocs:input_type -> pair.v1.ListDocsRequest
-	23, // 46: pair.v1.PairService.GetDoc:input_type -> pair.v1.GetDocRequest
-	25, // 47: pair.v1.PairService.Show:input_type -> pair.v1.ShowRequest
-	27, // 48: pair.v1.PairService.Lookup:input_type -> pair.v1.LookupRequest
-	30, // 49: pair.v1.PairService.Check:input_type -> pair.v1.CheckRequest
-	32, // 50: pair.v1.PairService.SectionDiff:input_type -> pair.v1.SectionDiffRequest
-	34, // 51: pair.v1.PairService.Update:input_type -> pair.v1.UpdateRequest
-	36, // 52: pair.v1.PairService.Ask:input_type -> pair.v1.AskRequest
-	38, // 53: pair.v1.PairService.WaitDecision:input_type -> pair.v1.WaitDecisionRequest
-	40, // 54: pair.v1.PairService.Drain:input_type -> pair.v1.DrainRequest
-	42, // 55: pair.v1.PairService.StageDecide:input_type -> pair.v1.StageDecideRequest
-	44, // 56: pair.v1.PairService.StageNote:input_type -> pair.v1.StageNoteRequest
-	46, // 57: pair.v1.PairService.StageRemove:input_type -> pair.v1.StageRemoveRequest
-	48, // 58: pair.v1.PairService.ListFeedback:input_type -> pair.v1.ListFeedbackRequest
-	50, // 59: pair.v1.PairService.Confirm:input_type -> pair.v1.ConfirmRequest
-	52, // 60: pair.v1.PairService.AckRetracted:input_type -> pair.v1.AckRetractedRequest
-	54, // 61: pair.v1.PairService.Trigger:input_type -> pair.v1.TriggerRequest
-	56, // 62: pair.v1.PairService.Bind:input_type -> pair.v1.BindRequest
-	59, // 63: pair.v1.PairService.SkipUpdate:input_type -> pair.v1.SkipUpdateRequest
-	61, // 64: pair.v1.PairService.SetSessionState:input_type -> pair.v1.SetSessionStateRequest
-	64, // 65: pair.v1.PairService.ListSessions:input_type -> pair.v1.ListSessionsRequest
-	66, // 66: pair.v1.PairService.Hook:input_type -> pair.v1.HookRequest
-	68, // 67: pair.v1.PairService.Shutdown:input_type -> pair.v1.ShutdownRequest
-	18, // 68: pair.v1.PairService.Ping:output_type -> pair.v1.PingResponse
-	20, // 69: pair.v1.PairService.Status:output_type -> pair.v1.StatusResponse
-	22, // 70: pair.v1.PairService.ListDocs:output_type -> pair.v1.ListDocsResponse
-	24, // 71: pair.v1.PairService.GetDoc:output_type -> pair.v1.GetDocResponse
-	26, // 72: pair.v1.PairService.Show:output_type -> pair.v1.ShowResponse
-	29, // 73: pair.v1.PairService.Lookup:output_type -> pair.v1.LookupResponse
-	31, // 74: pair.v1.PairService.Check:output_type -> pair.v1.CheckResponse
-	33, // 75: pair.v1.PairService.SectionDiff:output_type -> pair.v1.SectionDiffResponse
-	35, // 76: pair.v1.PairService.Update:output_type -> pair.v1.UpdateResponse
-	37, // 77: pair.v1.PairService.Ask:output_type -> pair.v1.AskResponse
-	39, // 78: pair.v1.PairService.WaitDecision:output_type -> pair.v1.WaitDecisionResponse
-	41, // 79: pair.v1.PairService.Drain:output_type -> pair.v1.DrainResponse
-	43, // 80: pair.v1.PairService.StageDecide:output_type -> pair.v1.StageDecideResponse
-	45, // 81: pair.v1.PairService.StageNote:output_type -> pair.v1.StageNoteResponse
-	47, // 82: pair.v1.PairService.StageRemove:output_type -> pair.v1.StageRemoveResponse
-	49, // 83: pair.v1.PairService.ListFeedback:output_type -> pair.v1.ListFeedbackResponse
-	51, // 84: pair.v1.PairService.Confirm:output_type -> pair.v1.ConfirmResponse
-	53, // 85: pair.v1.PairService.AckRetracted:output_type -> pair.v1.AckRetractedResponse
-	55, // 86: pair.v1.PairService.Trigger:output_type -> pair.v1.TriggerResponse
-	58, // 87: pair.v1.PairService.Bind:output_type -> pair.v1.BindResponse
-	60, // 88: pair.v1.PairService.SkipUpdate:output_type -> pair.v1.SkipUpdateResponse
-	62, // 89: pair.v1.PairService.SetSessionState:output_type -> pair.v1.SetSessionStateResponse
-	65, // 90: pair.v1.PairService.ListSessions:output_type -> pair.v1.ListSessionsResponse
-	67, // 91: pair.v1.PairService.Hook:output_type -> pair.v1.HookResponse
-	69, // 92: pair.v1.PairService.Shutdown:output_type -> pair.v1.ShutdownResponse
-	68, // [68:93] is the sub-list for method output_type
-	43, // [43:68] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	16, // 35: pair.v1.DrainResponse.unresolved:type_name -> pair.v1.Feedback
+	16, // 36: pair.v1.StageDecideResponse.item:type_name -> pair.v1.Feedback
+	16, // 37: pair.v1.StageNoteResponse.item:type_name -> pair.v1.Feedback
+	5,  // 38: pair.v1.ListFeedbackRequest.states:type_name -> pair.v1.FeedbackState
+	16, // 39: pair.v1.ListFeedbackResponse.items:type_name -> pair.v1.Feedback
+	16, // 40: pair.v1.TriggerResponse.items:type_name -> pair.v1.Feedback
+	57, // 41: pair.v1.BindResponse.docs:type_name -> pair.v1.BoundDoc
+	57, // 42: pair.v1.Session.bindings:type_name -> pair.v1.BoundDoc
+	63, // 43: pair.v1.ListSessionsResponse.sessions:type_name -> pair.v1.Session
+	17, // 44: pair.v1.PairService.Ping:input_type -> pair.v1.PingRequest
+	19, // 45: pair.v1.PairService.Status:input_type -> pair.v1.StatusRequest
+	21, // 46: pair.v1.PairService.ListDocs:input_type -> pair.v1.ListDocsRequest
+	23, // 47: pair.v1.PairService.GetDoc:input_type -> pair.v1.GetDocRequest
+	25, // 48: pair.v1.PairService.Show:input_type -> pair.v1.ShowRequest
+	27, // 49: pair.v1.PairService.Lookup:input_type -> pair.v1.LookupRequest
+	30, // 50: pair.v1.PairService.Check:input_type -> pair.v1.CheckRequest
+	32, // 51: pair.v1.PairService.SectionDiff:input_type -> pair.v1.SectionDiffRequest
+	34, // 52: pair.v1.PairService.Update:input_type -> pair.v1.UpdateRequest
+	36, // 53: pair.v1.PairService.Ask:input_type -> pair.v1.AskRequest
+	38, // 54: pair.v1.PairService.WaitDecision:input_type -> pair.v1.WaitDecisionRequest
+	40, // 55: pair.v1.PairService.Drain:input_type -> pair.v1.DrainRequest
+	42, // 56: pair.v1.PairService.StageDecide:input_type -> pair.v1.StageDecideRequest
+	44, // 57: pair.v1.PairService.StageNote:input_type -> pair.v1.StageNoteRequest
+	46, // 58: pair.v1.PairService.StageRemove:input_type -> pair.v1.StageRemoveRequest
+	48, // 59: pair.v1.PairService.ListFeedback:input_type -> pair.v1.ListFeedbackRequest
+	50, // 60: pair.v1.PairService.Confirm:input_type -> pair.v1.ConfirmRequest
+	52, // 61: pair.v1.PairService.AckRetracted:input_type -> pair.v1.AckRetractedRequest
+	54, // 62: pair.v1.PairService.Trigger:input_type -> pair.v1.TriggerRequest
+	56, // 63: pair.v1.PairService.Bind:input_type -> pair.v1.BindRequest
+	59, // 64: pair.v1.PairService.SkipUpdate:input_type -> pair.v1.SkipUpdateRequest
+	61, // 65: pair.v1.PairService.SetSessionState:input_type -> pair.v1.SetSessionStateRequest
+	64, // 66: pair.v1.PairService.ListSessions:input_type -> pair.v1.ListSessionsRequest
+	66, // 67: pair.v1.PairService.Hook:input_type -> pair.v1.HookRequest
+	68, // 68: pair.v1.PairService.Shutdown:input_type -> pair.v1.ShutdownRequest
+	18, // 69: pair.v1.PairService.Ping:output_type -> pair.v1.PingResponse
+	20, // 70: pair.v1.PairService.Status:output_type -> pair.v1.StatusResponse
+	22, // 71: pair.v1.PairService.ListDocs:output_type -> pair.v1.ListDocsResponse
+	24, // 72: pair.v1.PairService.GetDoc:output_type -> pair.v1.GetDocResponse
+	26, // 73: pair.v1.PairService.Show:output_type -> pair.v1.ShowResponse
+	29, // 74: pair.v1.PairService.Lookup:output_type -> pair.v1.LookupResponse
+	31, // 75: pair.v1.PairService.Check:output_type -> pair.v1.CheckResponse
+	33, // 76: pair.v1.PairService.SectionDiff:output_type -> pair.v1.SectionDiffResponse
+	35, // 77: pair.v1.PairService.Update:output_type -> pair.v1.UpdateResponse
+	37, // 78: pair.v1.PairService.Ask:output_type -> pair.v1.AskResponse
+	39, // 79: pair.v1.PairService.WaitDecision:output_type -> pair.v1.WaitDecisionResponse
+	41, // 80: pair.v1.PairService.Drain:output_type -> pair.v1.DrainResponse
+	43, // 81: pair.v1.PairService.StageDecide:output_type -> pair.v1.StageDecideResponse
+	45, // 82: pair.v1.PairService.StageNote:output_type -> pair.v1.StageNoteResponse
+	47, // 83: pair.v1.PairService.StageRemove:output_type -> pair.v1.StageRemoveResponse
+	49, // 84: pair.v1.PairService.ListFeedback:output_type -> pair.v1.ListFeedbackResponse
+	51, // 85: pair.v1.PairService.Confirm:output_type -> pair.v1.ConfirmResponse
+	53, // 86: pair.v1.PairService.AckRetracted:output_type -> pair.v1.AckRetractedResponse
+	55, // 87: pair.v1.PairService.Trigger:output_type -> pair.v1.TriggerResponse
+	58, // 88: pair.v1.PairService.Bind:output_type -> pair.v1.BindResponse
+	60, // 89: pair.v1.PairService.SkipUpdate:output_type -> pair.v1.SkipUpdateResponse
+	62, // 90: pair.v1.PairService.SetSessionState:output_type -> pair.v1.SetSessionStateResponse
+	65, // 91: pair.v1.PairService.ListSessions:output_type -> pair.v1.ListSessionsResponse
+	67, // 92: pair.v1.PairService.Hook:output_type -> pair.v1.HookResponse
+	69, // 93: pair.v1.PairService.Shutdown:output_type -> pair.v1.ShutdownResponse
+	69, // [69:94] is the sub-list for method output_type
+	44, // [44:69] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_pair_v1_pair_proto_init() }
