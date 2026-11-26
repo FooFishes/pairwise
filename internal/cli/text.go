@@ -574,6 +574,9 @@ func bindText(res *pairv1.BindResponse, flag string) string {
 	if res.SessionId != "" {
 		t.line("下一步: 本会话修改上述区块时执行 `pair update <doc#sec>%s <<'EOF'`, 已缓存 base, 可省略 `--base`", flag)
 	} else {
+		// 宿主没有会话环境文件时, after-tool 从本条输出的 bind_id 关联会话; 两种途径都没有说明没有启用 Hook.
+		t.line("未关联会话: 本轮上下文给出了 Pairwise 会话短码时, Hook 会据本条输出自动关联, 之后的 pair 命令都带上 `--session <短码>`; " +
+			"没有会话短码说明未启用 Hook, 绑定不起作用, 无需再执行 bind")
 		t.line("下一步: 修改上述区块时执行 `pair update <doc#sec> --base <base> <<'EOF'`")
 	}
 	return t.String()
