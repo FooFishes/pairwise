@@ -23,13 +23,13 @@ pair hook prompt-submit
 stdin hook/edit-pair.json
 pair hook before-tool
 stdout '^\{"hookSpecificOutput":\{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"不要直接编辑 \.pair/modules/discover\.md: '
-stdout '修复操作: 执行 `pair show discover` 读取内容与 base, 再执行 `pair update discover#<sec> --base <hash> <<''EOF''` 提交单个区块, 或 `pair update discover --base <hash> --file <doc.md>` 提交完整文档"\}\}$'
+stdout '修复操作: 执行 `pair show discover` 读取内容与 base, 再执行 `pair update discover#<sec> --base <hash> <<''EOF''` 提交单个区块, 或 `pair update discover --base <hash> <<''EOF''` \(或 `--file <doc.md>`\) 提交完整文档"\}\}$'
 stdin hook/write-flow.json
 pair hook before-tool
-stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/flows/checkout\.md: .*修复操作: 执行 `pair update checkout --kind flow --file <doc.md>` 新建"'
+stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/flows/checkout\.md: .*修复操作: 执行 `pair update checkout --kind flow <<''EOF''` \(或 `--file <doc.md>`\) 新建"'
 stdin hook/multiedit-decision.json
 pair hook before-tool
-stdout '"permissionDecision":"deny".*修复操作: 修改问题文档后执行 `pair ask shop-policy --file <doc.md>` 重新提交"'
+stdout '"permissionDecision":"deny".*修复操作: 修改问题文档后执行 `pair ask shop-policy <<''EOF''` \(或 `--file <doc.md>`\) 重新提交"'
 stdin hook/notebook-pair.json
 pair hook before-tool
 stdout '"permissionDecision":"deny".*不要直接编辑 \.pair/modules/notes/draft\.ipynb: .*该文件没有对应的 pair 命令'

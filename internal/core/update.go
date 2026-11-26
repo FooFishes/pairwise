@@ -239,7 +239,7 @@ func overwrite(e *repo.Entry, t doc.Target, req *pairv1.UpdateRequest) (cur, raw
 	if t.Section != "" || req.Base != doc.FileHash(cur) {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Sprintf(
 			"拒绝更新: %s 无法解析 (%v), 不能按区块合并, 只能以完整文档覆盖, 且 --base 须等于当前文件的整文件哈希.\n"+
-				"修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖",
+				"修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 以完整文档 (含 Frontmatter) 覆盖",
 			e.Rel, e.Err, e.ID))
 	}
 	raw, err = fresh(t, e.Kind, req.Content)
@@ -313,7 +313,7 @@ func covers(t doc.Target, target string) bool {
 func newKind(t doc.Target, kind string) (doc.Kind, error) {
 	if t.Section != "" {
 		return 0, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("文档「%s」不存在, 不能按区块更新.\n修复操作: 用含 Frontmatter 的完整文档执行 `pair update %[1]s --kind module` 新建, 流程文档改用 `--kind flow`", t.Doc))
+			fmt.Sprintf("文档「%s」不存在, 不能按区块更新.\n修复操作: 执行 `pair update %[1]s --kind module <<'EOF'` (或 `--file <doc.md>`) 传入含 Frontmatter 的完整文档新建, 流程文档改用 `--kind flow`", t.Doc))
 	}
 	switch kind {
 	case "", "module":

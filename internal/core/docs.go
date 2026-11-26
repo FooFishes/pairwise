@@ -41,7 +41,7 @@ func findDoc(ix *repo.Index, id string) (*repo.Entry, error) {
 	}
 	if e.Doc == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("%s 无法解析: %v, 不能按区块处理.\n修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖", e.Rel, e.Err, e.ID))
+			fmt.Sprintf("%s 无法解析: %v, 不能按区块处理.\n修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 以完整文档 (含 Frontmatter) 覆盖", e.Rel, e.Err, e.ID))
 	}
 	return e, nil
 }

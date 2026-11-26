@@ -60,9 +60,9 @@ func Run(ix *repo.Index, opts Options) []Diagnostic {
 // e 可以是尚未写入索引的文档 (如 ask 提交的问题), 只用到 Kind、ID、Doc 与 Err. 结果按行号排序.
 func Doc(ix *repo.Index, e *repo.Entry) []doc.Diagnostic {
 	if e.Doc == nil {
-		fix := fmt.Sprintf("执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[1]s --base <hash> --file <doc.md>` 以完整文档 (含 Frontmatter) 覆盖该文件", e.ID)
+		fix := fmt.Sprintf("执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[1]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 以完整文档 (含 Frontmatter) 覆盖该文件", e.ID)
 		if e.Kind == doc.KindDecision {
-			fix = fmt.Sprintf("修正问题文档后执行 `pair ask %s --file <doc.md>` 重新提交, 覆盖该文件", e.ID)
+			fix = fmt.Sprintf("修正问题文档后执行 `pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交, 覆盖该文件", e.ID)
 		}
 		return []doc.Diagnostic{{Severity: doc.SeverityError, Line: 1, Code: "parse-error", Message: e.Err.Error(), Fix: fix}}
 	}
@@ -101,9 +101,9 @@ func (c *checker) add(sev doc.Severity, line int, code, msg, fix string) {
 // resubmit 返回修正后重新写入该文档的命令.
 func (c *checker) resubmit() string {
 	if c.e.Kind == doc.KindDecision {
-		return fmt.Sprintf("修改后执行 `pair ask %s --file <doc.md>` 重新提交", c.e.ID)
+		return fmt.Sprintf("修改后执行 `pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交", c.e.ID)
 	}
-	return fmt.Sprintf("执行 `pair show %s` 获取 base 后用 `pair update %[1]s --base <hash>` 提交修正", c.e.ID)
+	return fmt.Sprintf("执行 `pair show %s` 获取 base 后用 `pair update %[1]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 提交修正后的完整文档 (含 Frontmatter)", c.e.ID)
 }
 
 // frontLine 返回沿 keys 逐层找到的最深一个 Frontmatter 键所在的行号, 一个都找不到时返回 1.
@@ -141,7 +141,7 @@ func (c *checker) id() {
 	if o := c.ix.Doc(c.e.ID); o != nil && o.Kind != c.e.Kind {
 		c.add(doc.SeverityError, 1, "duplicate-doc-id",
 			fmt.Sprintf("文档 ID「%s」已被 %s 使用, 模块与流程共享同一命名空间", c.e.ID, o.Rel),
-			fmt.Sprintf("执行 `pair update <新 id> --kind %s` 以新 ID 重建该文档, 同步全部 `@%s#...` 引用后删除原文件", c.e.Kind, c.e.ID))
+			fmt.Sprintf("执行 `pair update <新 id> --kind %s <<'EOF'` (或 `--file <doc.md>`) 以新 ID 重建该文档, 同步全部 `@%s#...` 引用后删除原文件", c.e.Kind, c.e.ID))
 	}
 }
 

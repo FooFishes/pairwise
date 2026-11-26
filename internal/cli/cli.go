@@ -262,7 +262,7 @@ func rpc[Req any, Res proto.Message](a *app, cmd *cobra.Command,
 // readInput 读取 --file 指定的文件; 未指定时读取 stdin. stdin 是终端、输入为空或只有空白时
 // 一律按缺少输入的用法错误处理, 避免遗漏 heredoc 或生成了空文件时清空文档内容.
 func readInput(cmd *cobra.Command, file string) (string, error) {
-	const missing = "缺少输入: 用 --file <doc.md> 指定文件, 或从 stdin 传入内容 (如 `<<'EOF'`)"
+	const missing = "缺少输入: 用 `<<'EOF'` 从 stdin 传入内容 (或 `--file <doc.md>` 指定文件)"
 	var b []byte
 	var err error
 	if file != "" {

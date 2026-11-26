@@ -27,7 +27,7 @@ func (w *Workspace) Ask(ctx context.Context, req *pairv1.AskRequest) (*pairv1.As
 	}
 	if t.Section != "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Sprintf("问题 ID %q 不能带 #.\n修复操作: 执行 `pair ask <id> --file <doc.md>`, id 只能包含字母、数字、- 与 _", req.Id))
+			fmt.Sprintf("问题 ID %q 不能带 #.\n修复操作: 执行 `pair ask <id> <<'EOF'` (或 `--file <doc.md>`), id 只能包含字母、数字、- 与 _", req.Id))
 	}
 	if req.SessionId, err = w.sessionID(req.SessionId); err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func (w *Workspace) Ask(ctx context.Context, req *pairv1.AskRequest) (*pairv1.As
 	d, err := doc.Parse([]byte(req.Content), doc.KindDecision)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Sprintf("问题文档无法解析: %v.\n修复操作: 修正 Frontmatter 后执行 `pair ask %s --file <doc.md>` 重新提交", err, req.Id))
+			fmt.Sprintf("问题文档无法解析: %v.\n修复操作: 修正 Frontmatter 后执行 `pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交", err, req.Id))
 	}
 	dirty := false
 	switch d.Front.ID {
@@ -101,7 +101,7 @@ func (w *Workspace) WaitDecision(ctx context.Context, req *pairv1.WaitDecisionRe
 	e := ix.Decision(req.Id)
 	if e == nil || e.Doc == nil {
 		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Sprintf("问题「%s」不存在或无法解析.\n修复操作: 先执行 `pair ask %[1]s --file <doc.md>` 提交问题", req.Id))
+			fmt.Sprintf("问题「%s」不存在或无法解析.\n修复操作: 先执行 `pair ask %[1]s <<'EOF'` (或 `--file <doc.md>`) 提交问题", req.Id))
 	}
 	secs := req.TimeoutSecs
 	if secs <= 0 {

@@ -124,7 +124,7 @@ func statusText(res *pairv1.StatusResponse) string {
 
 	var next []string
 	if len(res.Docs) == 0 {
-		next = append(next, "尚无文档: 按 `pair init` 输出的迁移指引用 `pair update <id> --kind module --file <doc.md>` 创建模块")
+		next = append(next, "尚无文档: 按 `pair init` 输出的迁移指引用 `pair update <id> --kind module <<'EOF'` (或 `--file <doc.md>`) 创建模块")
 	}
 	if res.Triggered > 0 {
 		next = append(next, "执行 `pair drain` 读取已发送的开发者反馈")
@@ -185,11 +185,11 @@ func listText(res *pairv1.ListDocsResponse, kind pairv1.DocKind) string {
 	case len(res.Docs) > 0:
 		t.line("下一步: 执行 `pair show <id>` 查看内容与 base 哈希")
 	case kind == pairv1.DocKind_DOC_KIND_DECISION:
-		t.line("下一步: 暂无待确认问题; 遇到需要开发者决策的设计取舍时用 `pair ask <id> --file <doc.md>` 提交")
+		t.line("下一步: 暂无待确认问题; 遇到需要开发者决策的设计取舍时用 `pair ask <id> <<'EOF'` (或 `--file <doc.md>`) 提交")
 	case kind == pairv1.DocKind_DOC_KIND_FLOW:
-		t.line("下一步: 用 `pair update <id> --kind flow --file <doc.md>` 创建流程, 执行 `pair list` 查看全部文档")
+		t.line("下一步: 用 `pair update <id> --kind flow <<'EOF'` (或 `--file <doc.md>`) 创建流程, 执行 `pair list` 查看全部文档")
 	default:
-		t.line("下一步: 用 `pair update <id> --kind module --file <doc.md>` 创建模块")
+		t.line("下一步: 用 `pair update <id> --kind module <<'EOF'` (或 `--file <doc.md>`) 创建模块")
 	}
 	return t.String()
 }
@@ -208,9 +208,9 @@ func showText(res *pairv1.ShowResponse) string {
 	if i := slices.IndexFunc(d.GetDiagnostics(), func(g *pairv1.Diagnostic) bool { return g.Code == "parse-error" }); i >= 0 {
 		t.line("该文件无法解析: %s", d.Diagnostics[i].Message)
 		if decision {
-			t.line("下一步: 修正问题文档后执行 `pair ask %s --file <doc.md>` 重新提交, 覆盖该文件", d.GetId())
+			t.line("下一步: 修正问题文档后执行 `pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交, 覆盖该文件", d.GetId())
 		} else {
-			t.line("下一步: 以完整文档 (含 Frontmatter) 覆盖该文件: `pair update %s --base %s --file <doc.md>`", d.GetId(), res.Base)
+			t.line("下一步: 以完整文档 (含 Frontmatter) 覆盖该文件: `pair update %s --base %s <<'EOF'` (或 `--file <doc.md>`)", d.GetId(), res.Base)
 		}
 		return t.String()
 	}
@@ -218,12 +218,12 @@ func showText(res *pairv1.ShowResponse) string {
 		if dec := d.GetDecision(); len(dec.GetTargets()) > 0 {
 			t.line("目标进度: %s", progressText(dec.Targets, dec.Progress))
 		}
-		t.line("下一步: 修改该问题后执行 `pair ask %s --file <doc.md>` 重新提交", d.GetId())
+		t.line("下一步: 修改该问题后执行 `pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交", d.GetId())
 		return t.String()
 	}
 	if res.SectionId == "" {
 		t.line("下一步: 修改单个区块执行 `pair update %s#<sec> --base %s <<'EOF'`, 输入只含该区块; "+
-			"提交完整文档 (含 Frontmatter) 执行 `pair update %[1]s --base %[2]s --file <doc.md>`", d.GetId(), res.Base)
+			"提交完整文档 (含 Frontmatter) 执行 `pair update %[1]s --base %[2]s <<'EOF'` (或 `--file <doc.md>`)", d.GetId(), res.Base)
 		return t.String()
 	}
 	if i := slices.IndexFunc(d.GetSections(), func(s *pairv1.Section) bool { return s.Id == res.SectionId }); i >= 0 {
@@ -271,7 +271,7 @@ func lookupText(res *pairv1.LookupResponse) string {
 		t.line("下一步: 执行 `pair show <id>` 查看模块规则; 修改源码涉及规则变更时用 `pair update` 同步文档")
 	}
 	if unmatched {
-		t.line("下一步: 未命中的源码若属于新的子系统, 用 `pair update <id> --kind module --file <doc.md>` 新建模块并在 scope 中覆盖它")
+		t.line("下一步: 未命中的源码若属于新的子系统, 用 `pair update <id> --kind module <<'EOF'` (或 `--file <doc.md>`) 新建模块并在 scope 中覆盖它")
 	}
 	if !matched && !unmatched {
 		t.line("下一步: 这些路径无需同步文档")

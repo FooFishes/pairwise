@@ -199,12 +199,12 @@ func pairEditReason(ix *repo.Index, rel, flag string) string {
 	case !md || i < 0:
 		return msg + "该文件没有对应的 pair 命令, 请在回复中说明需要的改动, 由开发者修改"
 	case docKinds[i] == doc.KindDecision:
-		return msg + fmt.Sprintf("修改问题文档后执行 `pair ask %s --file <doc.md>%s` 重新提交", id, flag)
+		return msg + fmt.Sprintf("修改问题文档后执行 `pair ask %s%s <<'EOF'` (或 `--file <doc.md>`) 重新提交", id, flag)
 	case ix.Doc(id) == nil:
-		return msg + fmt.Sprintf("执行 `pair update %s --kind %s --file <doc.md>%s` 新建", id, docKinds[i], flag)
+		return msg + fmt.Sprintf("执行 `pair update %s --kind %s%s <<'EOF'` (或 `--file <doc.md>`) 新建", id, docKinds[i], flag)
 	}
 	return msg + fmt.Sprintf("执行 `pair show %s` 读取内容与 base, 再执行 `pair update %[1]s#<sec> --base <hash>%s <<'EOF'` 提交单个区块, "+
-		"或 `pair update %[1]s --base <hash> --file <doc.md>%[2]s` 提交完整文档", id, flag)
+		"或 `pair update %[1]s --base <hash>%[2]s <<'EOF'` (或 `--file <doc.md>`) 提交完整文档", id, flag)
 }
 
 var docKinds = []doc.Kind{doc.KindModule, doc.KindFlow, doc.KindDecision}

@@ -36,10 +36,10 @@ var gitHooks = []string{"prepare-commit-msg", "commit-msg"}
 // migrationGuide 是 init 输出的全仓迁移任务指引.
 const migrationGuide = `全仓迁移任务 (由 Agent 按顺序执行):
 1. 梳理拓扑: 扫描源码与旧 docs/, 按页面或核心子系统拆分模块, 跨模块的完整交互链路或调用时序拆为流程.
-   - 模块: ` + "`pair update <id> --kind module --file <doc.md>`" + `, Frontmatter 含 id 与 scope (关联源码的 Glob 列表).
-   - 流程: ` + "`pair update <id> --kind flow --file <doc.md>`" + `, Frontmatter 只含 id, 正文用 ` + "`@module#sec`" + ` 引用关联区块.
+   - 模块: ` + "`pair update <id> --kind module <<'EOF'` (或 `--file <doc.md>`)" + `, Frontmatter 含 id 与 scope (关联源码的 Glob 列表).
+   - 流程: ` + "`pair update <id> --kind flow <<'EOF'` (或 `--file <doc.md>`)" + `, Frontmatter 只含 id, 正文用 ` + "`@module#sec`" + ` 引用关联区块.
    - 正文按 ` + "`## 标题 <!-- #sec -->`" + ` 切分区块; Agent 自行补全、未经开发者确认的细节逐条写入 sections.<sec>.assumptions (id 与 text), 不写 confirmed_hash.
-2. 归拢遗留问题: 业务类代码 TODO 迁入 ` + "`<!-- pw:workaround id=\"...\" -->`" + ` 块并写明解除条件; 旧文档之间或与代码不符之处写成待确认问题 (含 targets、default_option 与 pw:compare 方案对比), 用 ` + "`pair ask <id> --file <doc.md>`" + ` 提交.
+2. 归拢遗留问题: 业务类代码 TODO 迁入 ` + "`<!-- pw:workaround id=\"...\" -->`" + ` 块并写明解除条件; 旧文档之间或与代码不符之处写成待确认问题 (含 targets、default_option 与 pw:compare 方案对比), 用 ` + "`pair ask <id> <<'EOF'` (或 `--file <doc.md>`)" + ` 提交.
 3. 校验: 执行 ` + "`pair check`" + ` 修复全部错误, 用 ` + "`pair lookup <path...>`" + ` 抽查源码能反查到模块.
 4. 归档旧文档: 核对迁移完整后, 归档或移除原有的重复长篇综述文档.
 5. 审阅: 开发者执行 ` + "`pair serve --open`" + ` 在工作台审阅区块与假设并确认.
