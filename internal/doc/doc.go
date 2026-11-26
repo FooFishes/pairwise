@@ -208,8 +208,12 @@ type Document struct {
 	Diags []Diagnostic
 }
 
-// Parse 解析一份文档. Frontmatter 不是合法 YAML 时返回错误, 其余语法问题记入 Diags.
+// Parse 解析一份文档. 含未解决的合并冲突或 Frontmatter 不是合法 YAML 时返回错误, 其余语法问题记入 Diags.
+// 冲突两侧常各有一份同 ID 的区块, 按区块切分会得到错位的结构, 因此整份视为无法解析.
 func Parse(raw []byte, kind Kind) (*Document, error) {
+	if n := conflictLine(raw); n > 0 {
+		return nil, fmt.Errorf("第 %d 行起有未解决的合并冲突, 需合并 <<<<<<< 与 >>>>>>> 之间两侧的内容并删除冲突标记行", n)
+	}
 	text, end, err := splitFront(raw)
 	if err != nil {
 		return nil, err

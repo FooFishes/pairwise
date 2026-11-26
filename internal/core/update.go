@@ -177,9 +177,9 @@ func (w *Workspace) write(ctx context.Context, ix *repo.Index, branch string, t 
 	case e == nil:
 		kind, raw, err = created(t, req)
 		path, resp.Created = w.repo.Path(kind, t.Doc), true
-	case e.Doc == nil:
+	case e.Doc == nil || merge.Mergeable(e.Doc) != nil:
 		kind, path = e.Kind, e.Path
-		oursRaw, raw, err = overwrite(e, t, req)
+		ours, oursRaw, raw, err = overwrite(e, t, req)
 	default:
 		ours, kind, path, oursRaw = e.Doc, e.Kind, e.Path, e.Doc.Raw
 		raw, err = w.merged(ctx, e, t, req)
@@ -190,7 +190,7 @@ func (w *Workspace) write(ctx context.Context, ix *repo.Index, branch string, t 
 
 	result, err := doc.Parse(raw, kind)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf("输入无法解析: %v.\n修复操作: 按上述原因修正输入后重试", err))
 	}
 	if control(result, ours, fbs, resp) {
 		raw = render(result)
@@ -226,29 +226,45 @@ func created(t doc.Target, req *pairv1.UpdateRequest) (doc.Kind, []byte, error) 
 	if err != nil {
 		return 0, nil, err
 	}
-	raw, err := fresh(t, kind, req.Content)
+	raw, err := fresh(t, kind, req.Content, nil)
 	return kind, raw, err
 }
 
-// overwrite 以整文档输入覆盖无法解析的已有文件. 这类文件无法三路合并, 因此 --base 必须等于当前文件的整文件哈希,
-// 表明调用方读过当前内容. 返回当前文件与覆盖后的内容.
-func overwrite(e *repo.Entry, t doc.Target, req *pairv1.UpdateRequest) (cur, raw []byte, err error) {
+// overwrite 以整文档输入覆盖无法按区块合并的已有文件 (无法解析, 或区块 ID 重复而无法对齐). 不做合并,
+// 因此 --base 必须等于当前文件的整文件哈希, 表明调用方读过当前内容. 返回受控字段的来源、当前文件与覆盖后的内容:
+// 无法解析的文件只有 Frontmatter 可读时 (如正文含合并冲突) 以它为来源, 都不可读时为 nil.
+func overwrite(e *repo.Entry, t doc.Target, req *pairv1.UpdateRequest) (ours *doc.Document, cur, raw []byte, err error) {
 	if cur, err = os.ReadFile(e.Path); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if t.Section != "" || req.Base != doc.FileHash(cur) {
-		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Sprintf(
-			"拒绝更新: %s 无法解析 (%v), 不能按区块合并, 只能以完整文档覆盖, 且 --base 须等于当前文件的整文件哈希.\n"+
-				"修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 以完整文档 (含 Frontmatter) 覆盖",
-			e.Rel, e.Err, e.ID))
+		reason := e.Err
+		if reason == nil {
+			reason = merge.Mergeable(e.Doc)
+		}
+		return nil, nil, nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Sprintf(
+			"拒绝更新: %s 无法按区块合并 (%v), 只能以完整文档覆盖, 且 --base 须等于当前文件的整文件哈希.\n"+
+				"修复操作: 执行 `pair show %s` 查看当前内容与 base, 再执行 `pair update %[3]s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 传入修正后的完整文档 (含 Frontmatter)",
+			e.Rel, reason, e.ID))
 	}
-	raw, err = fresh(t, e.Kind, req.Content)
-	return cur, raw, err
+	ours = e.Doc
+	if ours == nil && e.Front != nil {
+		ours = &doc.Document{Front: e.Front}
+	}
+	// 当前 Frontmatter 可读时, 不带 Frontmatter 的输入多半是漏写了, 覆盖会丢掉 id、scope 与确认状态.
+	if in, perr := doc.Parse([]byte(req.Content), e.Kind); ours != nil && perr == nil && in.FrontEnd == 0 {
+		return nil, nil, nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf(
+			"整文档覆盖的输入缺少 Frontmatter, 覆盖后会丢掉 id、scope 与确认状态.\n"+
+				"修复操作: 以 `pair show %s` 输出中的 Frontmatter 为底, 执行 `pair update %[1]s --base %s <<'EOF'` (或 `--file <doc.md>`) 传入完整文档", e.ID, req.Base))
+	}
+	// 以当前文件可读的 Frontmatter 为 base, 原样提交的受控字段不算改动, Frontmatter 字节保持不变.
+	raw, err = fresh(t, e.Kind, req.Content, ours)
+	return ours, cur, raw, err
 }
 
-// fresh 按整文档输入构造不经合并的内容, 剥离受控字段.
-func fresh(t doc.Target, kind doc.Kind, content string) ([]byte, error) {
-	theirs, dirty, err := wholeTheirs(t, kind, content, nil)
+// fresh 按整文档输入构造不经合并的内容, 受控字段设为 base 的值 (新建时 base 为 nil, 清空).
+func fresh(t doc.Target, kind doc.Kind, content string, base *doc.Document) ([]byte, error) {
+	theirs, dirty, err := wholeTheirs(t, kind, content, base)
 	if err != nil {
 		return nil, err
 	}
@@ -273,9 +289,11 @@ func (w *Workspace) merged(ctx context.Context, e *repo.Entry, t doc.Target, req
 	if err != nil {
 		return nil, err
 	}
+	// 当前文件已确认可对齐, 失败只会来自输入或 base 中重复的区块.
 	res, err := merge.Merge3(base, e.Doc, theirs, merge.Labels{Base: "base", Ours: "当前文件", Theirs: "本次更新"})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf(
+			"%v.\n修复操作: 去掉输入中重复的区块后重试; 仍然失败时执行 `pair show %s` 获取新的 base, 在最新内容基础上重新执行 `pair update %s --base <hash>`", err, e.ID, t))
 	}
 	if len(res.Conflicts) > 0 {
 		return nil, conflictErr(t, res.Conflicts)
@@ -362,7 +380,14 @@ func (w *Workspace) base(ctx context.Context, e *repo.Entry, t doc.Target, req *
 	if err != nil {
 		return nil, err
 	}
-	return doc.Parse(raw, e.Kind)
+	d, err := doc.Parse(raw, e.Kind)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Sprintf(
+			"拒绝更新: 基准哈希 `%s` 对应的版本无法解析 (%v), 不能作为合并的共同祖先.\n"+
+				"修复操作: 请先执行 `pair show %s` 获取新的 base 哈希, 在最新内容基础上重新执行 `pair update %s --base <hash>`.",
+			hash, err, e.ID, t))
+	}
+	return d, nil
 }
 
 // wholeTheirs 解析整文档输入: 补齐或校验 id, 并把受控字段设回 base 的值 (新建时清空).
@@ -371,7 +396,7 @@ func wholeTheirs(t doc.Target, kind doc.Kind, content string, base *doc.Document
 	d, err := doc.Parse([]byte(content), kind)
 	if err != nil {
 		return nil, false, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Sprintf("输入无法解析: %v.\n修复操作: 修正输入开头的 Frontmatter 后重试", err))
+			fmt.Sprintf("输入无法解析: %v.\n修复操作: 按上述原因修正输入后重试", err))
 	}
 	if base != nil && d.FrontEnd == 0 {
 		return nil, false, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf(
@@ -446,7 +471,7 @@ func sectionTheirs(t doc.Target, base *doc.Document, content string) (*doc.Docum
 	}
 	d, err := doc.Parse(raw, base.Kind)
 	if err != nil {
-		return nil, err
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Sprintf("区块输入无法解析: %v.\n修复操作: 按上述原因修正区块输入后重试", err))
 	}
 	// 输入中未闭合的代码块、HTML 注释或夹带的 ## 标题会吞掉或拆分其后的区块, 合并时将被当作删除.
 	if got := outline(d); !slices.Equal(got, want) {

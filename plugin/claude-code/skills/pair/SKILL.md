@@ -47,6 +47,14 @@ description: 在带有 .pair/ 目录的仓库中工作时使用. 规定如何通
 - 批注 (`fb-<n>`): 改完后 `pair update <module#sec> --base <hash> --resolves fb-<n>`; 针对某条假设的批注闭环时工具会移除该假设.
 - 待确认问题: 对每个受影响目标执行 `pair update <module#sec> --base <hash> --resolves <id>`; 某个目标按所选方案无需改动时执行 `pair update <module#sec> --resolves <id> --no-change "<原因>"`. 全部目标完成后工具自动删除问题文件.
 
+## 解决 `.pair/` 的合并冲突
+
+`git merge` 或 `git rebase` 在 `.pair/` 文档中留下冲突标记时, 该文档无法按区块处理, 只能整体覆盖:
+
+1. `pair show <id>` 读取带冲突标记的全文与 base.
+2. 合并 `<<<<<<<` 与 `>>>>>>>` 之间两侧应保留的内容, 删除标记行, 执行 `pair update <id> --base <hash> <<'EOF'` 传入完整文档 (含 Frontmatter); 确认状态沿用当前文件. 冲突在 `.pair/decisions/` 的问题文档中时改用 `pair ask <id> <<'EOF'` 重新提交.
+3. `pair check` 通过后 `git add` 该文件, 再完成合并或继续 rebase. 不要用 `git checkout --ours/--theirs` 丢弃另一侧的改动.
+
 ## 提交待确认问题
 
 遇到需要开发者拍板的设计取舍时, 不要在回复末尾集中提问, 而是写成问题文档:

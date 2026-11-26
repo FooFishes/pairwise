@@ -15,6 +15,7 @@ import (
 	pairv1 "github.com/FooFishes/pairwise/gen/pair/v1"
 	"github.com/FooFishes/pairwise/internal/doc"
 	"github.com/FooFishes/pairwise/internal/hook"
+	"github.com/FooFishes/pairwise/internal/merge"
 	"github.com/FooFishes/pairwise/internal/repo"
 	"github.com/FooFishes/pairwise/internal/store"
 )
@@ -202,6 +203,9 @@ func pairEditReason(ix *repo.Index, rel, flag string) string {
 		return msg + fmt.Sprintf("修改问题文档后执行 `pair ask %s%s <<'EOF'` (或 `--file <doc.md>`) 重新提交", id, flag)
 	case ix.Doc(id) == nil:
 		return msg + fmt.Sprintf("执行 `pair update %s --kind %s%s <<'EOF'` (或 `--file <doc.md>`) 新建", id, docKinds[i], flag)
+	case ix.Doc(id).Doc == nil || merge.Mergeable(ix.Doc(id).Doc) != nil:
+		return msg + fmt.Sprintf("该文件无法按区块合并 (如含未解决的合并冲突), 执行 `pair show %s` 查看当前内容与 base, "+
+			"再执行 `pair update %[1]s --base <hash>%s <<'EOF'` (或 `--file <doc.md>`) 传入修正后的完整文档 (含 Frontmatter) 覆盖", id, flag)
 	}
 	return msg + fmt.Sprintf("执行 `pair show %s` 读取内容与 base, 再执行 `pair update %[1]s#<sec> --base <hash>%s <<'EOF'` 提交单个区块, "+
 		"或 `pair update %[1]s --base <hash>%[2]s <<'EOF'` (或 `--file <doc.md>`) 提交完整文档", id, flag)

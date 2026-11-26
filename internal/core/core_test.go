@@ -333,3 +333,62 @@ func TestConfirmThenChanged(t *testing.T) {
 		t.Errorf("diff = %v", diff)
 	}
 }
+
+// 合并冲突留下的冲突标记使文档无法解析: scope 仍按可读的 Frontmatter 反查, 只能以完整文档覆盖, 覆盖时沿用确认状态.
+func TestUpdateConflictedDoc(t *testing.T) {
+	stage := "## 舞台 <!-- #stage -->\n\n舞台正文.\n"
+	tests := []struct {
+		name     string
+		conflict func(front, body string) string
+	}{
+		{"正文冲突", func(front, body string) string {
+			return front + strings.Replace(body, stage, "<<<<<<< ours\n"+stage+"甲.\n=======\n"+stage+"乙.\n>>>>>>> theirs\n", 1)
+		}},
+		{"Frontmatter 冲突", func(front, body string) string {
+			inner := strings.TrimSuffix(strings.TrimPrefix(front, "---\n"), "---\n")
+			theirs := strings.Replace(inner, "lib/discover/**", "lib/recommend/**", 1)
+			return "---\n<<<<<<< ours\n" + inner + "=======\n" + theirs + ">>>>>>> theirs\n---\n" + body
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newWorkspace(t)
+			must(w.Confirm(ctx, &pairv1.ConfirmRequest{Target: "discover#stage"}))
+			d := w.read(t, doc.KindModule, "discover")
+			confirmed := d.Meta("stage").ConfirmedHash
+			raw := tt.conflict(string(d.Raw[:d.FrontEnd]), string(d.Raw[d.FrontEnd:]))
+			path := w.repo.Path(doc.KindModule, "discover")
+			if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if r := must(w.Lookup(ctx, &pairv1.LookupRequest{Paths: []string{"lib/discover/a.ts"}})).Results[0]; len(r.Docs) != 1 {
+				t.Errorf("冲突期间 scope 反查未命中: %v", r)
+			}
+			show := must(w.Show(ctx, &pairv1.ShowRequest{Target: "discover"}))
+			if show.Base != doc.FileHash([]byte(raw)) || !slices.ContainsFunc(show.Doc.Diagnostics, func(g *pairv1.Diagnostic) bool {
+				return g.Code == "parse-error" && strings.Contains(g.Message, "未解决的合并冲突")
+			}) {
+				t.Errorf("show = %v", show.Doc.Diagnostics)
+			}
+			_, err := w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#stage", Base: show.Base, Content: "舞台甲乙.\n"})
+			if err == nil || !strings.Contains(err.Error(), "只能以完整文档覆盖") || !strings.Contains(err.Error(), "修复操作") {
+				t.Errorf("按区块更新冲突文档: %v", err)
+			}
+
+			// 漏写 Frontmatter 的输入会丢掉 scope, 拒绝写入.
+			body := strings.Replace(string(d.Raw[d.FrontEnd:]), "舞台正文.", "舞台甲乙.", 1)
+			if _, err := w.Update(ctx, &pairv1.UpdateRequest{Target: "discover", Base: show.Base, Content: body}); err == nil || !strings.Contains(err.Error(), "缺少 Frontmatter") {
+				t.Errorf("不带 Frontmatter 的覆盖: %v", err)
+			}
+
+			// 原样提交 Frontmatter 时其字节不变, 确认状态保留.
+			front := string(d.Raw[:d.FrontEnd])
+			must(w.Update(ctx, &pairv1.UpdateRequest{Target: "discover", Base: show.Base, Content: front + body}))
+			got := w.read(t, doc.KindModule, "discover")
+			if string(got.Raw[:got.FrontEnd]) != front || got.Meta("stage").ConfirmedHash != confirmed || !strings.Contains(section(got, "stage"), "舞台甲乙.") {
+				t.Errorf("覆盖后:\n%s", got.Raw)
+			}
+		})
+	}
+}

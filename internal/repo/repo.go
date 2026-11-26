@@ -145,6 +145,9 @@ type Entry struct {
 	// Doc 在文件无法解析时为 nil, 此时 Err 记录原因.
 	Doc *doc.Document
 	Err error
+	// Front 是文件无法解析但 Frontmatter 仍可读 (如正文含合并冲突) 时读到的 Frontmatter,
+	// 使冲突解决之前 scope 反查照常命中, 以完整文档覆盖时沿用其中的受控字段.
+	Front *doc.Front
 }
 
 // Index 是某一时刻 .pair/ 全部文档的快照.
@@ -176,7 +179,9 @@ func (r *Repo) Load() (*Index, error) {
 			if err != nil {
 				return nil, err
 			}
-			e.Doc, e.Err = doc.Parse(raw, kind)
+			if e.Doc, e.Err = doc.Parse(raw, kind); e.Err != nil {
+				e.Front, _ = doc.ReadFront(raw)
+			}
 			ix.Entries = append(ix.Entries, e)
 		}
 	}
@@ -215,11 +220,15 @@ func (ix *Index) Of(kind doc.Kind) []*Entry {
 }
 
 // ModulesFor 返回 scope 命中相对路径的模块, scope 使用 doublestar 语法.
-// 不合法的 Glob 不命中任何路径, 由 pair check 报错.
+// 不合法的 Glob 不命中任何路径, 由 pair check 报错. 无法解析的模块按可读的 Frontmatter 匹配.
 func (ix *Index) ModulesFor(rel string) []*Entry {
 	var out []*Entry
 	for _, e := range ix.Of(doc.KindModule) {
-		if e.Doc != nil && slices.ContainsFunc(e.Doc.Front.Scope, func(g string) bool {
+		f := e.Front
+		if e.Doc != nil {
+			f = e.Doc.Front
+		}
+		if f != nil && slices.ContainsFunc(f.Scope, func(g string) bool {
 			return doublestar.MatchUnvalidated(g, rel)
 		}) {
 			out = append(out, e)

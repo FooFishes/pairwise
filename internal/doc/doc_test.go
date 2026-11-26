@@ -418,3 +418,47 @@ func TestParseTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestConflictMarkers(t *testing.T) {
+	const front = "---\nid: discover\n---\n"
+	tests := []struct {
+		name string
+		in   string
+		line int
+	}{
+		{"正文冲突", front + "<<<<<<< ours\n## 舞台 <!-- #stage -->\n甲\n=======\n## 舞台 <!-- #stage -->\n乙\n>>>>>>> theirs\n", 4},
+		{"不带标签", front + "## 舞台 <!-- #stage -->\n<<<<<<<\n甲\n=======\n乙\n>>>>>>>\n", 5},
+		{"Frontmatter 冲突", "---\n<<<<<<< ours\nid: a\n=======\nid: b\n>>>>>>> theirs\n---\n", 2},
+		{"围栏代码块内的示例", front + "## 冲突 <!-- #c -->\n~~~text\n<<<<<<< ours\n甲\n=======\n乙\n>>>>>>> theirs\n~~~\n", 0},
+		{"只有开始标记", front + "<<<<<<< ours\n甲\n", 0},
+		{"多层引用而非结束标记", front + ">>>>>>> 引用\n", 0},
+		{"更长的符号串", front + "<<<<<<<< 甲\n>>>>>>>> 乙\n", 0},
+		{"一侧未闭合的围栏延续到另一侧", front + "<<<<<<< ours\n## 流程 <!-- #flow -->\n```mermaid\nA --> D\n=======\n## 流程 <!-- #flow -->\n```mermaid\nA --> C\n>>>>>>> theirs\n", 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.in), KindModule)
+			if got := conflictLine([]byte(tt.in)); got != tt.line || (err != nil) != (tt.line > 0) {
+				t.Errorf("line = %d, err = %v, want line %d", got, err, tt.line)
+			}
+		})
+	}
+}
+
+func TestReadFront(t *testing.T) {
+	tests := []struct {
+		name, in string
+		scope    []string
+	}{
+		{"正文冲突时 Frontmatter 照常读取", "---\nid: a\nscope:\n  - \"src/**\"\n---\n<<<<<<< ours\n甲\n=======\n乙\n>>>>>>> theirs\n", []string{"src/**"}},
+		{"Frontmatter 冲突取 ours 一侧", "---\nid: a\n<<<<<<< ours\nscope:\n  - \"ours/**\"\n||||||| base\nscope: []\n=======\nscope:\n  - \"theirs/**\"\n>>>>>>> theirs\n---\n", []string{"ours/**"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := ReadFront([]byte(tt.in))
+			if err != nil || f.ID != "a" || !slices.Equal(f.Scope, tt.scope) {
+				t.Errorf("f = %+v, err = %v", f, err)
+			}
+		})
+	}
+}

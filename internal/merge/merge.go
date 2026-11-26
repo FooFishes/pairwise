@@ -36,6 +36,12 @@ type Result struct {
 	Conflicts []Conflict
 }
 
+// Mergeable 报告文档能否按区块对齐参与合并: 区块 ID (缺锚点时为标题) 重复时不能.
+func Mergeable(d *doc.Document) error {
+	_, err := parts(d)
+	return err
+}
+
 // Merge3 对同一文档的三个版本做三路合并. base 为 nil 表示双方各自新建.
 func Merge3(base, ours, theirs *doc.Document, labels Labels) (*Result, error) {
 	bp, err := parts(base)
