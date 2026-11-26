@@ -439,3 +439,21 @@ func TestLookupDirectory(t *testing.T) {
 		t.Errorf("lookup lib/discover/spec = %v", r)
 	}
 }
+
+// 批注不能以 --no-change 结案: 修复命令先 show 重新读取, 区块已符合批注时原样提交即可闭环.
+func TestNoteNoChangeHint(t *testing.T) {
+	w := newWorkspace(t)
+	note := must(w.StageNote(ctx, &pairv1.StageNoteRequest{Target: "discover#list", Message: "列表要写明分页"})).Item
+	must(w.Trigger(ctx, &pairv1.TriggerRequest{}))
+	must(w.Drain(ctx, &pairv1.DrainRequest{}))
+	_, err := w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#list", Resolves: []string{note.Id}, NoChange: "已写明"})
+	want := "执行 `pair show discover#list` 读取区块最新内容与 base, 按批注修改 (已符合批注时原样提交) 后执行 " +
+		"`pair update discover#list --base <hash> --resolves " + note.Id + " <<'EOF'`"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("修复命令 = %v", err)
+	}
+	resp := must(w.Update(ctx, &pairv1.UpdateRequest{Target: "discover#list", Base: w.showBase(t, "discover#list"), Content: "列表正文.\n", Resolves: []string{note.Id}}))
+	if resp.Changed || !slices.Equal(resp.Resolved, []string{note.Id}) {
+		t.Errorf("原样提交 = %v", resp)
+	}
+}

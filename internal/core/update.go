@@ -134,7 +134,8 @@ func (w *Workspace) noChange(ix *repo.Index, branch string, t doc.Target, req *p
 	for _, fb := range fbs {
 		if fb.Kind != kindDecision {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Sprintf("批注「%s」不能以 --no-change 结案, 批注须由修改其目标区块的更新闭环.\n修复操作: 按批注修改后执行 `pair update %s --base <hash> --resolves %[1]s`", fb.Id, fb.Target))
+				fmt.Sprintf("批注「%s」不能以 --no-change 结案, 批注须由修改其目标区块的更新闭环.\n"+
+					"修复操作: 执行 `pair show %[2]s` 读取区块最新内容与 base, 按批注修改 (已符合批注时原样提交) 后执行 `pair update %[2]s --base <hash> --resolves %[1]s <<'EOF'`", fb.Id, fb.Target))
 		}
 		if !slices.ContainsFunc(fb.Targets, func(target string) bool { return covers(t, target) }) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -308,7 +309,7 @@ func checkCoverage(t doc.Target, fbs []*pairv1.Feedback) error {
 		case kindNote:
 			if !covers(t, fb.Target) {
 				return connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Sprintf("批注「%s」针对区块「%s」, 本次更新「%s」没有覆盖它.\n修复操作: 修改该区块并执行 `pair update %[2]s --base <hash> --resolves %[1]s`", fb.Id, fb.Target, t))
+					fmt.Sprintf("批注「%s」针对区块「%s」, 本次更新「%s」没有覆盖它.\n修复操作: 执行 `pair show %[2]s` 读取区块最新内容与 base, 修改后执行 `pair update %[2]s --base <hash> --resolves %[1]s <<'EOF'`", fb.Id, fb.Target, t))
 			}
 		case kindDecision:
 			if !slices.ContainsFunc(fb.Targets, func(s string) bool { return covers(t, s) }) {
