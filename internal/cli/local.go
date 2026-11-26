@@ -89,6 +89,16 @@ func (a *app) initCmd() *cobra.Command {
 			if err := r.Git.SetConfig(ctx, "merge.pair.driver", "pair merge-driver %O %A %B"); err != nil {
 				return err
 			}
+			// 交叉合并时 git 先合并多个合并基得到虚拟 base; 带冲突标记的虚拟 base 无法按结构解析, 内层合并改用 --virtual.
+			for _, kv := range [][2]string{
+				{"merge.pair-virtual.name", "Pairwise 结构化三路合并 (交叉合并的合并基)"},
+				{"merge.pair-virtual.driver", "pair merge-driver --virtual --marker-size %L %O %A %B"},
+				{"merge.pair.recursive", "pair-virtual"},
+			} {
+				if err := r.Git.SetConfig(ctx, kv[0], kv[1]); err != nil {
+					return err
+				}
+			}
 			t.line("- 已注册 Git 合并驱动 merge.pair (.pair/.gitattributes: %s)", mergeAttr)
 			if !hooks {
 				t.line("- 未安装 Git 钩子; 需要提交前联动检查时执行 `pair init --git-hooks`")
@@ -264,47 +274,161 @@ func missingDiags(ms []check.Missing, baseRef string) []*pairv1.Diagnostic {
 }
 
 func (a *app) mergeDriverCmd() *cobra.Command {
-	return &cobra.Command{
+	var virtual bool
+	var markerSize int
+	cmd := &cobra.Command{
 		Use:   "merge-driver <base> <ours> <theirs>",
 		Short: "供 Git merge/rebase 调用的结构化三路合并驱动, 结果写回 <ours>",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var docs [3]*doc.Document
-			for i, path := range args {
-				raw, err := os.ReadFile(path)
-				if err != nil {
-					return err
-				}
-				// 没有共同祖先 (双方各自新建) 时 Git 传入空的 base.
-				if i == 0 && len(raw) == 0 {
-					continue
-				}
-				if docs[i], err = doc.Parse(raw, doc.KindModule); err != nil {
-					return fmt.Errorf("无法按结构合并 (%s): %w; 请手动解决该文件的冲突", path, err)
-				}
-			}
-			res, err := merge.Merge3(docs[0], docs[1], docs[2], merge.Labels{Base: "base", Ours: "ours", Theirs: "theirs"})
+			front, err := readFront(args)
 			if err != nil {
-				return fmt.Errorf("无法按结构合并: %w", err)
-			}
-			if err := os.WriteFile(args[1], res.Raw, 0o644); err != nil {
 				return err
 			}
-			if len(res.Conflicts) == 0 {
-				return nil
+			res, err := mergeDocs(args, virtual)
+			switch {
+			// 合并基之间只有区块顺序冲突时 Virtual 已按 base 的顺序写出, 不按行合并: 按行合并移动过的区块可能把它复制一份, 外层合并随之删掉它.
+			case err == nil && (len(res.Conflicts) == 0 || !virtual || orderOnly(res.Conflicts)):
+				if err := os.WriteFile(args[1], res.Raw, 0o644); err != nil {
+					return err
+				}
+				if len(res.Conflicts) == 0 || virtual {
+					return nil
+				}
+				fmt.Fprint(cmd.ErrOrStderr(), conflictText(res.Conflicts, front))
+				return exitCode(1)
+			case virtual:
+				// 合并基之间有冲突或无法解析时按行合并, 与 git 文本合并得到的虚拟 base 一致: 冲突处的标记不等于任何一侧,
+				// 长度取 git 给的 %L, 与外层合并的标记区分开; 外层合并见到带标记的 base 就退回按行合并,
+				// 不会把与 base 相同的一侧当作未改动而静默采用另一侧.
+				_, err := gitx.MergeFile(cmd.Context(), args[1], args[0], args[2], markerSize)
+				return err
 			}
-			var where []string
-			for _, c := range res.Conflicts {
-				where = append(where, c.Where)
+			// 退回 git 的按行合并, 不能只留下 ours 一侧.
+			n, merr := gitx.MergeFile(cmd.Context(), args[1], args[0], args[2], markerSize)
+			if merr != nil {
+				return merr
 			}
-			msg := "已写入冲突标记"
-			if slices.Contains(where, "order") {
-				msg += "; order 表示两侧以不同方式调整了区块顺序, 已按 ours 的顺序写入, 请手动调整"
+			merged, rerr := os.ReadFile(args[1])
+			if rerr != nil {
+				return rerr
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: %d 处冲突 (%s), %s\n", len(where), strings.Join(where, ", "), msg)
+			_, perr := doc.Parse(merged, doc.KindModule)
+			switch {
+			case perr != nil && (n > 0 || doc.HasMarkers(merged)):
+				fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: 无法按结构合并 (%v), 已按行合并, 结果仍无法解析\n%s", err, conflictHint(front))
+			case perr != nil:
+				fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: 无法按结构合并 (%v), 已按行合并, 结果中没有冲突标记但仍无法解析 (%v)\n"+
+					"修复操作: 执行 `pair show %s` 查看当前内容, 按上述原因修正后执行 %s, 再 `git add` 该文件完成合并\n", err, perr, frontID(front), redoCmd(front))
+			case n > 0:
+				fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: 无法按结构合并 (%v), 已按行合并, %d 处冲突的标记位于围栏代码块内\n%s", err, n, conflictHint(front))
+			default:
+				fmt.Fprintf(cmd.ErrOrStderr(), "pair merge-driver: 无法按结构合并 (%v), 已按行合并, 结果中没有冲突标记\n"+
+					"修复操作: 执行 `pair show %s` 核对合并结果, 有误时按其「下一步」修正, 再 `git add` 该文件完成合并\n", err, frontID(front))
+			}
 			return exitCode(1)
 		},
 	}
+	cmd.Flags().BoolVar(&virtual, "virtual", false, "合并交叉合并的多个合并基: 有冲突或无法解析时按行合并且不报冲突, 结果作为外层合并的虚拟 base")
+	cmd.Flags().IntVar(&markerSize, "marker-size", 7, "按行合并时冲突标记的长度, 由 git 以 %L 传入")
+	return cmd
+}
+
+// mergeDocs 按结构合并 git 传入的 base、ours 与 theirs 三个文件. 没有共同祖先 (双方各自新建) 时 base 为空文件.
+// 交叉合并的虚拟 base 用更长的标记 (git 的 %L), 正文中的这类标记 doc.Parse 不认; 合并基与合并虚拟 base 时的
+// 全部输入都按任意长度的标记检查, 带标记的视为无法解析.
+func mergeDocs(paths []string, virtual bool) (*merge.Result, error) {
+	var docs [3]*doc.Document
+	for i, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 && len(raw) == 0 {
+			continue
+		}
+		role := []string{"合并基", "ours ", "theirs "}[i]
+		if (i == 0 || virtual) && doc.HasMarkers(raw) {
+			return nil, fmt.Errorf("%s含未解决的合并冲突", role)
+		}
+		if docs[i], err = doc.Parse(raw, doc.KindModule); err != nil {
+			return nil, fmt.Errorf("%s无法解析: %w", role, err)
+		}
+	}
+	if virtual {
+		return merge.Virtual(docs[0], docs[1], docs[2])
+	}
+	return merge.Merge3(docs[0], docs[1], docs[2], merge.Labels{Base: "base", Ours: "ours", Theirs: "theirs"})
+}
+
+// orderOnly 报告冲突是否只有区块顺序一处.
+func orderOnly(cs []merge.Conflict) bool {
+	return len(cs) == 1 && cs[0].Where == "order"
+}
+
+// conflictText 说明按结构合并的冲突与修复操作. 区块顺序冲突不写标记, 按 ours 的顺序写入, 因此列出两侧的顺序.
+func conflictText(cs []merge.Conflict, f *doc.Front) string {
+	var where []string
+	var order *merge.Conflict
+	for i, c := range cs {
+		where = append(where, c.Where)
+		if c.Where == "order" {
+			order = &cs[i]
+		}
+	}
+	if orderOnly(cs) {
+		return fmt.Sprintf("pair merge-driver: 两侧以不同方式调整了区块顺序, 已按 ours 的顺序写入, 文件中没有冲突标记 (ours: %s; theirs: %s)\n"+
+			"修复操作: 需要其他顺序时执行 `pair show %s` 查看当前内容, 调整区块顺序后执行 %s, 再 `git add` 该文件完成合并\n",
+			orderText(order.Ours), orderText(order.Theirs), frontID(f), redoCmd(f))
+	}
+	msg := "已写入冲突标记"
+	if order != nil {
+		msg += fmt.Sprintf("; 两侧以不同方式调整了区块顺序, 已按 ours 的顺序写入, theirs 的顺序为 %s", orderText(order.Theirs))
+	}
+	return fmt.Sprintf("pair merge-driver: %d 处冲突 (%s), %s\n%s", len(where), strings.Join(where, ", "), msg, conflictHint(f))
+}
+
+// orderText 把按行排列的区块键序写成一行, 前言区的空键不列出.
+func orderText(keys []byte) string {
+	return strings.Join(slices.DeleteFunc(strings.Split(string(keys), "\n"), func(k string) bool { return k == "" }), ", ")
+}
+
+// readFront 依次读取 ours、theirs 与 base 的 Frontmatter, 取第一个带 id 的, 用来给出修复命令; 都不可读时为 nil.
+func readFront(paths []string) (*doc.Front, error) {
+	for _, i := range []int{1, 2, 0} {
+		raw, err := os.ReadFile(paths[i])
+		if err != nil {
+			return nil, err
+		}
+		if f, err := doc.ReadFront(raw); err == nil && f.ID != "" {
+			return f, nil
+		}
+	}
+	return nil, nil
+}
+
+// redoCmd 返回以完整文档覆盖的命令. 驱动参数中没有文件路径, 按 readFront 读到的 Frontmatter 区分问题文档:
+// 只有它带 targets 与 default_option, 改用 pair ask 重新提交.
+func redoCmd(f *doc.Front) string {
+	id := frontID(f)
+	if f != nil && (len(f.Targets) > 0 || f.DefaultOption != "") {
+		return fmt.Sprintf("`pair ask %s <<'EOF'` (或 `--file <doc.md>`) 重新提交问题", id)
+	}
+	return fmt.Sprintf("`pair update %s --base <hash> <<'EOF'` (或 `--file <doc.md>`) 以完整文档覆盖", id)
+}
+
+func frontID(f *doc.Front) string {
+	if f == nil {
+		return "<id>"
+	}
+	return f.ID
+}
+
+// conflictHint 返回解决带冲突标记的合并结果的修复操作.
+func conflictHint(f *doc.Front) string {
+	id, redo := frontID(f), redoCmd(f)
+	return fmt.Sprintf("修复操作: 执行 `pair show %s` 查看冲突, 合并两侧内容并删除冲突标记行后执行 %s, "+
+		"再 `git add` 该文件完成合并; 不要用 `git checkout --ours/--theirs` 丢弃另一侧\n", id, redo)
 }
 
 func (a *app) gitHookCmd() *cobra.Command {

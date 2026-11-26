@@ -95,6 +95,17 @@ func (r *Repo) ChangedFiles(ctx context.Context, cached bool, baseRef string) ([
 	return splitNUL(out), nil
 }
 
+// MergeFile 在当前目录按行三路合并文件, 结果写回 ours, 冲突处写入 markerSize 个字符的冲突标记; 返回冲突数.
+func MergeFile(ctx context.Context, ours, base, theirs string, markerSize int) (int, error) {
+	_, err := run(ctx, ".", "merge-file", "--marker-size="+strconv.Itoa(markerSize), "-L", "ours", "-L", "base", "-L", "theirs", ours, base, theirs)
+	// 退出码是冲突数 (超过 127 时为 127), 出错时为负数.
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() > 0 && ee.ExitCode() < 128 {
+		return ee.ExitCode(), nil
+	}
+	return 0, err
+}
+
 // CommitMessages 返回 baseRef..HEAD 区间内每个提交的完整提交信息.
 func (r *Repo) CommitMessages(ctx context.Context, baseRef string) ([]string, error) {
 	out, err := r.Run(ctx, "log", "-z", "--format=%B", baseRef+"..HEAD", "--")

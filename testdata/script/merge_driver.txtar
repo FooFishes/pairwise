@@ -1,5 +1,5 @@
 # 合并驱动: 两个分支分别修改同一模块 Frontmatter 的相邻行与不同区块时 git merge 自动成功;
-# 同一区块两侧都改时写入冲突标记并以非零退出.
+# 同一区块两侧都改时写入冲突标记并以非零退出; 冲突文档按无法解析处理, 以完整文档覆盖解决后完成合并.
 
 exec git init -q -b main
 pair init
@@ -38,10 +38,338 @@ exec git commit -q -am other
 ! exec git merge --no-edit side
 stdout 'CONFLICT \(content\): Merge conflict in .pair/modules/discover.md'
 stderr 'pair merge-driver: 1 处冲突 \(section:stage\), 已写入冲突标记'
+stderr '修复操作: 执行 `pair show discover` 查看冲突, 合并两侧内容并删除冲突标记行后执行 `pair update discover --base <hash> <<''EOF''`'
 grep '^<<<<<<< ' .pair/modules/discover.md
 grep '^>>>>>>> ' .pair/modules/discover.md
 grep '^舞台正文 side\.$' .pair/modules/discover.md
 grep '^舞台正文 other\.$' .pair/modules/discover.md
+
+# 冲突期间: scope 反查照常命中; show 说明冲突并给出整文档覆盖命令; 按区块更新与 check 都指向整文档覆盖.
+pair lookup src/discover/app.ts
+stdout '^- discover \(\.pair/modules/discover\.md\)$'
+pair show discover
+stdout '该文件无法解析: 第 \d+ 行起有未解决的合并冲突'
+stdout '`pair update discover --base [0-9a-f]{12} <<''EOF''` \(或 `--file <doc.md>`\)'
+grab BASE 'base: ([0-9a-f]{12})' stdout
+stdin in/stage.md
+! pair update 'discover#stage' --base $BASE
+stderr '只能以完整文档覆盖'
+! pair check
+stdout '\[parse-error\] 第 \d+ 行起有未解决的合并冲突'
+
+# 以完整文档覆盖解决冲突: 输入不带 sections, 确认状态沿用当前文件; 随后完成合并提交.
+stdin in/resolved.md
+pair update discover --base $BASE
+stdout '^已更新 discover'
+grep 'confirmed_hash: "388e36cc4281"' .pair/modules/discover.md
+! grep '^(<<<<<<<|>>>>>>>) ' .pair/modules/discover.md
+pair check
+stdout '检查通过'
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git status --porcelain
+! stdout .
+
+# 问题文档冲突: 修复提示改用 pair ask 重新提交, 照做不会误建同名模块.
+exec git checkout -q -b dec-a
+cp in/dec-base.md .pair/decisions/shop-policy.md
+exec git add -A
+exec git commit -q -m dec-base
+exec git checkout -q -b dec-b
+cp in/dec-b.md .pair/decisions/shop-policy.md
+exec git commit -q -am dec-b
+exec git checkout -q dec-a
+cp in/dec-a.md .pair/decisions/shop-policy.md
+exec git commit -q -am dec-a
+! exec git merge --no-edit dec-b
+stderr '执行 `pair ask shop-policy <<''EOF''` \(或 `--file <doc.md>`\) 重新提交问题'
+! stderr 'pair update shop-policy'
+exec git merge --abort
+
+# 交叉合并且合并基之间冲突: 内层按行合并得到带标记的虚拟 base, 外层随之退回按行合并, 两侧的改动都不丢.
+exec git checkout -q -b cross-m
+cp in/x-base.md .pair/modules/discover.md
+exec git commit -q -am x-base
+exec git checkout -q -b cross-s
+cp in/x-s1.md .pair/modules/discover.md
+exec git commit -q -am s1
+exec git checkout -q cross-m
+cp in/x-m1.md .pair/modules/discover.md
+exec git commit -q -am m1
+exec git tag m1
+! exec git merge --no-edit cross-s
+cp in/x-mx.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q cross-s
+! exec git merge --no-edit m1
+cp in/x-sy.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+cp in/x-s3.md .pair/modules/discover.md
+exec git commit -q -am s3
+exec git checkout -q cross-m
+cp in/x-m3.md .pair/modules/discover.md
+exec git commit -q -am m3
+exec git merge-base --all cross-m cross-s
+stdout -count=2 '^[0-9a-f]{40}$'
+! exec git merge --no-edit cross-s
+stderr -count=1 'pair merge-driver: 无法按结构合并 \(合并基含未解决的合并冲突\)'
+! stderr '处冲突'
+grep '^<<<<<<< ' .pair/modules/discover.md
+grep '^导语 side\.$' .pair/modules/discover.md
+grep '^列表正文 main3\.$' .pair/modules/discover.md
+grep '^舞台正文 X\.$' .pair/modules/discover.md
+grep '^舞台正文 Y\.$' .pair/modules/discover.md
+exec git merge --abort
+
+# 交叉合并中一侧把冲突解决回原文: 外层合并照常报冲突, 不会把这一侧当作未改动而静默采用另一侧.
+exec git checkout -q -b back-m
+cp in/x-base.md .pair/modules/discover.md
+exec git commit -q -am back-base
+exec git checkout -q -b back-s
+cp in/x-s1.md .pair/modules/discover.md
+exec git commit -q -am bs1
+exec git checkout -q back-m
+cp in/x-m1.md .pair/modules/discover.md
+exec git commit -q -am bm1
+exec git tag bm1
+! exec git merge --no-edit back-s
+cp in/x-base.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q back-s
+! exec git merge --no-edit bm1
+cp in/x-sy.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+cp in/x-s3.md .pair/modules/discover.md
+exec git commit -q -am bs3
+exec git checkout -q back-m
+cp in/x-back3.md .pair/modules/discover.md
+exec git commit -q -am bm3
+! exec git merge --no-edit back-s
+grep '^舞台正文\.$' .pair/modules/discover.md
+grep '^舞台正文 Y\.$' .pair/modules/discover.md
+grep '^<<<<<<< ' .pair/modules/discover.md
+grep '^导语 side\.$' .pair/modules/discover.md
+grep '^列表正文 main3\.$' .pair/modules/discover.md
+exec git merge --abort
+
+# 交叉合并且合并基之间按行冲突、按区块能干净合并: 内层合并按区块合并, 外层合并中一侧的回退不会被另一侧覆盖.
+exec git checkout -q -b clean-m
+cp in/y-base.md .pair/modules/discover.md
+exec git commit -q -am y-base
+exec git checkout -q -b clean-s
+cp in/y-s1.md .pair/modules/discover.md
+exec git commit -q -am ys1
+exec git checkout -q clean-m
+cp in/y-m1.md .pair/modules/discover.md
+exec git commit -q -am ym1
+exec git tag ym1
+exec git merge -q --no-edit clean-s
+exec git checkout -q clean-s
+exec git merge -q --no-edit ym1
+cp in/y-s3.md .pair/modules/discover.md
+exec git commit -q -am ys3
+exec git checkout -q clean-m
+cp in/y-m3.md .pair/modules/discover.md
+exec git commit -q -am ym3
+exec git merge-base --all clean-m clean-s
+stdout -count=2 '^[0-9a-f]{40}$'
+exec git merge -q --no-edit clean-s
+grep '^舞台正文\.$' .pair/modules/discover.md
+grep '^分类正文 s3\.$' .pair/modules/discover.md
+grep '^列表正文 s\.$' .pair/modules/discover.md
+! grep '^<<<<<<< ' .pair/modules/discover.md
+
+# 无法按结构合并 (theirs 提交了冲突标记) 时退回按行合并: 两侧的改动都留在文件中, 文档无法解析, 不会只剩 ours.
+exec git checkout -q -b line-m
+cp in/x-base.md .pair/modules/discover.md
+exec git commit -q -am line-base
+exec git checkout -q -b line-s
+cp in/z-s.md .pair/modules/discover.md
+exec git commit -q -am line-s
+exec git checkout -q line-m
+cp in/x-m1.md .pair/modules/discover.md
+exec git commit -q -am line-m
+! exec git merge --no-edit line-s
+stderr 'pair merge-driver: 无法按结构合并 \(theirs 无法解析: 第 \d+ 行起有未解决的合并冲突.*结果仍无法解析'
+stderr '修复操作: 执行 `pair show discover` 查看冲突'
+grep '^舞台正文 m\.$' .pair/modules/discover.md
+grep '^列表正文 s\.$' .pair/modules/discover.md
+! pair check
+stdout '\[parse-error\]'
+exec git merge --abort
+
+# 无法按结构合并但按行合并干净 (合并基与 ours 带着已提交的标记, theirs 删掉了它): 如实说明没有冲突标记.
+exec git checkout -q -b clean-line-m
+cp in/z-s.md .pair/modules/discover.md
+exec git commit -q -am clb
+exec git checkout -q -b clean-line-s
+cp in/y-s1.md .pair/modules/discover.md
+exec git commit -q -am cls
+exec git checkout -q clean-line-m
+cp in/z-m.md .pair/modules/discover.md
+exec git commit -q -am clm
+! exec git merge --no-edit clean-line-s
+stderr '无法按结构合并 \(合并基含未解决的合并冲突\), 已按行合并, 结果中没有冲突标记'
+stderr '修复操作: 执行 `pair show discover` 核对合并结果'
+! stderr '修复操作: .*删除冲突标记行'
+grep '^舞台正文 m\.$' .pair/modules/discover.md
+! grep '^<<<<<<< ' .pair/modules/discover.md
+pair check
+stdout '检查通过'
+exec git merge --abort
+
+# 交叉合并且合并基之间的 Frontmatter 冲突 (zdiff3): 内层标记按 git 给的 %L 加长, 与外层标记区分开, Frontmatter 仍可读.
+exec git checkout -q -b fm-m
+cp in/fm-base.md .pair/modules/discover.md
+exec git commit -q -am fm-base
+exec git checkout -q -b fm-s
+cp in/fm-s1.md .pair/modules/discover.md
+exec git commit -q -am fms1
+exec git checkout -q fm-m
+cp in/fm-m1.md .pair/modules/discover.md
+exec git commit -q -am fmm1
+exec git tag fmm1
+! exec git merge --no-edit fm-s
+cp in/fm-mx.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q fm-s
+! exec git merge --no-edit fmm1
+cp in/fm-sy.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q fm-m
+exec git config merge.conflictStyle zdiff3
+! exec git merge --no-edit fm-s
+grep '^<<<<<<<<< ' .pair/modules/discover.md
+pair lookup src/discover/app.ts
+stdout '^- discover \(\.pair/modules/discover\.md\)$'
+exec git merge --abort
+exec git config --unset merge.conflictStyle
+
+# 交叉合并且合并基之间只有区块顺序冲突: 内层合并不能把某一侧的顺序当作虚拟 base, 外层照常报冲突.
+exec git checkout -q -b ord-m
+cp in/x-base.md .pair/modules/discover.md
+exec git commit -q -am ord-base
+exec git tag ord-base
+exec git checkout -q -b ord-s
+cp in/o-s1.md .pair/modules/discover.md
+exec git commit -q -am os1
+exec git checkout -q ord-m
+cp in/o-m1.md .pair/modules/discover.md
+exec git commit -q -am om1
+exec git tag om1
+! exec git merge --no-edit ord-s
+cp in/o-m1.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q ord-s
+! exec git merge --no-edit om1
+cp in/o-s1.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+cp in/o-s3.md .pair/modules/discover.md
+exec git commit -q -am os3
+exec git checkout -q ord-m
+cp in/o-m3.md .pair/modules/discover.md
+exec git commit -q -am om3
+! exec git merge --no-edit ord-s
+stdout 'CONFLICT \(content\)'
+exec git merge --abort
+
+# 只有区块顺序冲突: 文件中没有冲突标记, 如实说明并列出两侧的顺序.
+exec git checkout -q -b order-only-m ord-base
+exec git checkout -q -b order-only-s
+cp in/o-m1.md .pair/modules/discover.md
+exec git commit -q -am oos
+exec git checkout -q order-only-m
+cp in/o-s1.md .pair/modules/discover.md
+exec git commit -q -am oom
+! exec git merge --no-edit order-only-s
+stderr '两侧以不同方式调整了区块顺序, 已按 ours 的顺序写入, 文件中没有冲突标记 \(ours: stage, list, tabs; theirs: tabs, stage, list\)'
+! stderr '删除冲突标记行'
+! grep '^<<<<<<< ' .pair/modules/discover.md
+exec git merge --abort
+
+# 退回按行合并后冲突落在围栏代码块内: 文档能解析, 仍如实报告冲突并给出解决命令.
+exec git checkout -q -b fence-m ord-base
+cp in/fc-base.md .pair/modules/discover.md
+exec git commit -q -am fc-base
+exec git checkout -q -b fence-s
+cp in/fc-s.md .pair/modules/discover.md
+exec git commit -q -am fcs
+exec git checkout -q fence-m
+cp in/fc-m.md .pair/modules/discover.md
+exec git commit -q -am fcm
+! exec git merge --no-edit fence-s
+stderr '已按行合并, 1 处冲突的标记位于围栏代码块内'
+stderr '修复操作: 执行 `pair show discover` 查看冲突'
+exec git merge --abort
+
+# 交叉合并且合并基之间只有区块顺序冲突 (四个区块): 按行合并会把移动的区块复制一份再被外层删掉; 内层按 base 的顺序写出, 区块不丢.
+exec git checkout -q -b ord4-m ord-base
+cp in/q-base.md .pair/modules/discover.md
+exec git commit -q -am q-base
+exec git checkout -q -b ord4-s
+cp in/q-s1.md .pair/modules/discover.md
+exec git commit -q -am qs1
+exec git checkout -q ord4-m
+cp in/q-m1.md .pair/modules/discover.md
+exec git commit -q -am qm1
+exec git tag qm1
+! exec git merge --no-edit ord4-s
+cp in/q-m1.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+exec git checkout -q ord4-s
+! exec git merge --no-edit qm1
+cp in/q-s1.md .pair/modules/discover.md
+exec git add .pair/modules/discover.md
+exec git commit -q --no-edit
+cp in/q-s3.md .pair/modules/discover.md
+exec git commit -q -am qs3
+exec git checkout -q ord4-m
+cp in/q-m3.md .pair/modules/discover.md
+exec git commit -q -am qm3
+! exec git merge --no-edit ord4-s
+stderr '两侧以不同方式调整了区块顺序'
+grep '^## 舞台 <!-- #stage -->$' .pair/modules/discover.md
+grep '^导语 side\.$' .pair/modules/discover.md
+grep '^  - "src/m/\*\*"$' .pair/modules/discover.md
+exec git merge --abort
+
+# 问题文档只有区块顺序冲突: 修复命令同样改用 pair ask.
+exec git checkout -q -b dord-m ord-base
+cp in/dq-base.md .pair/decisions/shop-policy.md
+exec git add -A
+exec git commit -q -m dq-base
+exec git checkout -q -b dord-s
+cp in/dq-s.md .pair/decisions/shop-policy.md
+exec git commit -q -am dqs
+exec git checkout -q dord-m
+cp in/dq-m.md .pair/decisions/shop-policy.md
+exec git commit -q -am dqm
+! exec git merge --no-edit dord-s
+stderr '两侧以不同方式调整了区块顺序'
+stderr '`pair ask shop-policy <<''EOF''`'
+! stderr 'pair update shop-policy'
+exec git merge --abort
+
+# 按行合并没有冲突但 Frontmatter 仍不是合法 YAML: 说明原因, 不要求删除并不存在的冲突标记.
+exec git checkout -q -b yaml-m ord-base
+exec git checkout -q -b yaml-s
+cp in/bad-yaml.md .pair/modules/discover.md
+exec git commit -q -am bad-yaml
+exec git checkout -q yaml-m
+cp in/x-m1.md .pair/modules/discover.md
+exec git commit -q -am ym
+! exec git merge --no-edit yaml-s
+stderr '已按行合并, 结果中没有冲突标记但仍无法解析'
+! stderr '删除冲突标记行'
 exec git merge --abort
 
 -- .gitignore --
@@ -179,3 +507,880 @@ sections:
 ## 列表 <!-- #list -->
 
 列表正文 feature.
+-- in/stage.md --
+舞台正文 side 与 other.
+-- in/resolved.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 side 与 other.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 main.
+
+## 列表 <!-- #list -->
+
+列表正文 feature.
+-- in/x-base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-m1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 m.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-s1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 s.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-mx.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 X.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-sy.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 Y.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-s3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+导语 side.
+
+## 舞台 <!-- #stage -->
+
+舞台正文 Y.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/x-m3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 X.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 main3.
+-- in/dec-base.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+<!-- pw:compare id="options" -->
+#### 剔除 <!-- #opt-a -->
+剔除.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+-- in/dec-a.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+<!-- pw:compare id="options" -->
+#### 剔除 <!-- #opt-a -->
+剔除, 选店页置灰.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+-- in/dec-b.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+<!-- pw:compare id="options" -->
+#### 剔除 <!-- #opt-a -->
+剔除并提示原因.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+-- in/z-s.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+<<<<<<< ours
+分类正文.
+=======
+分类正文 旧.
+>>>>>>> theirs
+
+## 列表 <!-- #list -->
+
+列表正文 s.
+-- in/x-back3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 main3.
+-- in/z-m.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 m.
+
+## 分类栏 <!-- #tabs -->
+
+<<<<<<< ours
+分类正文.
+=======
+分类正文 旧.
+>>>>>>> theirs
+
+## 列表 <!-- #list -->
+
+列表正文 s.
+-- in/y-base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/y-s1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 s.
+-- in/y-m1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 m.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/y-s3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 m.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文 s3.
+
+## 列表 <!-- #list -->
+
+列表正文 s.
+-- in/y-m3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/recommend/**"
+sections:
+  stage:
+    confirmed_hash: "388e36cc4281"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 s.
+-- in/o-m1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/o-s1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+-- in/o-m3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文 main3.
+-- in/o-s3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+导语 side.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+-- in/fm-base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/fm-m1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/m/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/fm-s1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/s/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/fm-mx.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/m/**"
+  - "src/s/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/fm-sy.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/s/**"
+  - "src/m/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+-- in/fc-base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+<<<<<<< ours
+分类正文.
+=======
+分类正文 旧.
+>>>>>>> theirs
+
+## 列表 <!-- #list -->
+
+```ts
+const a = 1
+```
+-- in/fc-m.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文 m.
+
+## 分类栏 <!-- #tabs -->
+
+<<<<<<< ours
+分类正文.
+=======
+分类正文 旧.
+>>>>>>> theirs
+
+## 列表 <!-- #list -->
+
+```ts
+const a = 2
+```
+-- in/fc-s.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+```ts
+const a = 3
+```
+-- in/q-base.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 更多 <!-- #more -->
+
+更多正文.
+-- in/q-s1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 更多 <!-- #more -->
+
+更多正文.
+-- in/q-m1.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 更多 <!-- #more -->
+
+更多正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+-- in/q-s3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+---
+
+# 发现页
+
+导语 side.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 更多 <!-- #more -->
+
+更多正文.
+-- in/q-m3.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+  - "src/m/**"
+---
+
+# 发现页
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文.
+
+## 更多 <!-- #more -->
+
+更多正文.
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+-- in/dq-base.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 背景 <!-- #bg -->
+
+背景.
+
+## 影响 <!-- #impact -->
+
+影响.
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+#### 剔除 <!-- #opt-a -->
+剔除.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+-- in/dq-s.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 影响 <!-- #impact -->
+
+影响.
+
+## 背景 <!-- #bg -->
+
+背景.
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+#### 剔除 <!-- #opt-a -->
+剔除.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+-- in/dq-m.md --
+---
+id: shop-policy
+targets:
+  - "discover#stage"
+default_option: opt-a
+---
+
+# 歇业门店处理
+
+## 背景 <!-- #bg -->
+
+背景.
+
+## 方案 <!-- #options -->
+
+<!-- pw:compare id="cmp" -->
+#### 剔除 <!-- #opt-a -->
+剔除.
+#### 保留 <!-- #opt-b -->
+保留.
+<!-- /pw:compare -->
+
+## 影响 <!-- #impact -->
+
+影响.
+-- in/bad-yaml.md --
+---
+id: discover
+scope:
+  - "src/discover/**"
+bad: [
+---
+
+# 发现页
+
+## 舞台 <!-- #stage -->
+
+舞台正文.
+
+## 分类栏 <!-- #tabs -->
+
+分类正文.
+
+## 列表 <!-- #list -->
+
+列表正文 s.

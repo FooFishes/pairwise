@@ -134,6 +134,15 @@ func TestMergeConflicts(t *testing.T) {
 		{"Frontmatter 同键冲突", "---\nid: a\nscope: [x]\n---\n## a <!-- #a -->\n", "---\nid: b\nscope: [x]\n---\n## a <!-- #a -->\n", "---\nid: c\nscope: [x]\n---\n## a <!-- #a -->\n",
 			[]string{"frontmatter:id"}, "---\n<<<<<<< ours\nid: b\nscope: [x]\n=======\nid: c\nscope: [x]\n>>>>>>> theirs\n---\n## a <!-- #a -->\n"},
 		{"各自新建前言区不同", "", "# A\n", "# B\n", []string{"preamble"}, "<<<<<<< ours\n# A\n=======\n# B\n>>>>>>> theirs\n"},
+		// 键序冲突时两侧分别采用 ours 与 theirs 的顺序.
+		{"Frontmatter 键序冲突", "---\nid: a\nscope: [x]\nowner: a\n---\n## a <!-- #a -->\n", "---\nscope: [y]\nid: a\nowner: a\n---\n## a <!-- #a -->\n",
+			"---\nowner: b\nid: a\nscope: [x]\n---\n## a <!-- #a -->\n",
+			[]string{"frontmatter:(order)"}, "---\n<<<<<<< ours\nscope: [y]\nid: a\nowner: b\n=======\nowner: b\nid: a\nscope: [y]\n>>>>>>> theirs\n---\n## a <!-- #a -->\n"},
+		// 冲突标记两侧只在冲突的键上不同, 键序相同: ours 的确认状态与 theirs 新增的键在两侧都保留.
+		{"Frontmatter 冲突两侧都含无冲突的改动", "---\nid: a\nscope: [x]\n---\n## a <!-- #a -->\n",
+			"---\nid: a\nscope: [y]\nsections:\n  a:\n    confirmed_hash: \"123456789012\"\n---\n## a <!-- #a -->\n",
+			"---\nid: a\nscope: [z]\nowner: t\n---\n## a <!-- #a -->\n",
+			[]string{"frontmatter:scope"}, "---\n<<<<<<< ours\nid: a\nscope: [y]\nowner: t\nsections:\n  a:\n    confirmed_hash: \"123456789012\"\n=======\nid: a\nscope: [z]\nowner: t\nsections:\n  a:\n    confirmed_hash: \"123456789012\"\n>>>>>>> theirs\n---\n## a <!-- #a -->\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

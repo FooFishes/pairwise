@@ -17,6 +17,10 @@ cmp .pair/config.toml want/config.toml
 ! exists .git/hooks/commit-msg
 exec git config merge.pair.driver
 stdout '^pair merge-driver %O %A %B$'
+exec git config merge.pair.recursive
+stdout '^pair-virtual$'
+exec git config merge.pair-virtual.driver
+stdout '^pair merge-driver --virtual --marker-size %L %O %A %B$'
 
 # 已有的非 Pairwise 钩子不被覆盖, 只给出接入指引.
 cp want/foreign-hook .git/hooks/prepare-commit-msg

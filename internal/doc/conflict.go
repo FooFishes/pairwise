@@ -75,3 +75,14 @@ func oursSide(text []byte) []byte {
 	return out
 }
 
+var (
+	wideOpen  = regexp.MustCompile(`(?m)^<{7,}(?:[ \t][^\n]*)?\r?$`)
+	wideClose = regexp.MustCompile(`(?m)^>{7,}(?:[ \t][^\n]*)?\r?$`)
+)
+
+// HasMarkers 报告 raw 中是否有任意长度的冲突标记 (行首 7 个以上的 < 及其后 7 个以上的 >), 不豁免围栏代码块.
+// 交叉合并时 git 合并多个合并基得到的虚拟 base 用更长的标记 (随递归层数增长), 且可能落在围栏内.
+func HasMarkers(raw []byte) bool {
+	o := wideOpen.FindIndex(raw)
+	return o != nil && wideClose.Match(raw[o[1]:])
+}

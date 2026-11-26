@@ -34,6 +34,10 @@ type Result struct {
 	// Raw 是合并后的完整文档; 存在冲突时冲突处写入 git 风格的冲突标记.
 	Raw       []byte
 	Conflicts []Conflict
+	// theirs 为真时 Frontmatter 冲突处取 theirs, 用于写出冲突标记的 theirs 一侧; 键序与 ours 一侧相同, 顺序冲突处采用 theirs 的顺序.
+	theirs bool
+	// baseOrder 为真时区块顺序冲突取 base 的顺序, 见 Virtual.
+	baseOrder bool
 }
 
 // Mergeable 报告文档能否按区块对齐参与合并: 区块 ID (缺锚点时为标题) 重复时不能.
@@ -44,6 +48,16 @@ func Mergeable(d *doc.Document) error {
 
 // Merge3 对同一文档的三个版本做三路合并. base 为 nil 表示双方各自新建.
 func Merge3(base, ours, theirs *doc.Document, labels Labels) (*Result, error) {
+	return threeWay(&Result{}, base, ours, theirs, labels)
+}
+
+// Virtual 合并交叉合并的多个合并基, 结果作为外层合并的虚拟 base. 与 Merge3 相同, 只是区块顺序冲突时以 base 的顺序为骨架:
+// 取任一侧的顺序都会让外层合并把这一侧当作未改动; 取 base 的顺序后两侧通常都相对它改了顺序, 外层照常记为顺序冲突.
+func Virtual(base, ours, theirs *doc.Document) (*Result, error) {
+	return threeWay(&Result{baseOrder: true}, base, ours, theirs, Labels{Base: "base", Ours: "ours", Theirs: "theirs"})
+}
+
+func threeWay(r *Result, base, ours, theirs *doc.Document, labels Labels) (*Result, error) {
 	bp, err := parts(base)
 	if err != nil {
 		return nil, err
@@ -56,11 +70,13 @@ func Merge3(base, ours, theirs *doc.Document, labels Labels) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Result{}
 	front := r.front(base, ours, theirs, labels)
 	keys, moved := order(bp.keys, op.keys, tp.keys)
 	if moved {
 		r.Conflicts = append(r.Conflicts, Conflict{Where: "order", Base: lines(bp.keys), Ours: lines(op.keys), Theirs: lines(tp.keys)})
+		if r.baseOrder {
+			keys = interleave(interleave(bp.keys, op.keys), tp.keys)
+		}
 	}
 	var ps []piece
 	for _, k := range keys {
@@ -296,7 +312,8 @@ func markers(o, t []byte, l Labels) []byte {
 }
 
 // front 合并 Frontmatter: 与 ours 语义相同时原样保留 ours 的字节, 冲突时整段用冲突标记包裹;
-// 其余情况下与 ours 或 theirs 原文语义相同的顶层键沿用其原文字节.
+// 其余情况下与 ours 或 theirs 原文语义相同的顶层键沿用其原文字节. 冲突标记两侧都是合并结果,
+// 只在冲突的键上分别取 ours 与 theirs, 使取任一侧解决冲突时不丢另一侧无冲突的改动.
 func (r *Result) front(base, ours, theirs *doc.Document, l Labels) []byte {
 	var b *yaml.Node
 	if base != nil {
@@ -306,14 +323,21 @@ func (r *Result) front(base, ours, theirs *doc.Document, l Labels) []byte {
 	m := r.node(b, ours.Front.Node, theirs.Front.Node, "")
 	switch {
 	case len(r.Conflicts) > n:
-		return append(append([]byte("---\n"), markers(frontText(ours), frontText(theirs), l)...), "---\n"...)
+		mt := (&Result{theirs: true}).node(b, ours.Front.Node, theirs.Front.Node, "")
+		return append(append([]byte("---\n"), markers(frontText(rendered(ours, theirs, m)), frontText(rendered(ours, theirs, mt)), l)...), "---\n"...)
 	case equal(m, ours.Front.Node):
 		return ours.Raw[:ours.FrontEnd]
 	}
+	return rendered(ours, theirs, m).Raw
+}
+
+// rendered 以 ours 的 Frontmatter 为骨架写出合并后的节点 m, 与 ours 或 theirs 原文语义相同的顶层键沿用其原文字节.
+func rendered(ours, theirs *doc.Document, m *yaml.Node) *doc.Document {
 	f := *ours.Front
 	f.Node = m
 	// theirs.Front.Node 可能已被调用方改过 (如 update 设置的假设), Render 按原文重新解析后再比较.
-	return f.Render(ours.Raw[:ours.FrontEnd], theirs.Raw[:theirs.FrontEnd])
+	raw := f.Render(ours.Raw[:ours.FrontEnd], theirs.Raw[:theirs.FrontEnd])
+	return &doc.Document{Raw: raw, FrontEnd: len(raw)}
 }
 
 // frontText 返回 Frontmatter 首尾 --- 分隔线之间的原文.
@@ -344,6 +368,9 @@ func (r *Result) node(b, o, t *yaml.Node, path string) *yaml.Node {
 		}
 	}
 	r.Conflicts = append(r.Conflicts, Conflict{Where: "frontmatter:" + path, Base: encode(b), Ours: encode(o), Theirs: encode(t)})
+	if r.theirs {
+		return t
+	}
 	return o
 }
 
@@ -386,6 +413,9 @@ func (r *Result) order(b, o, t []string, path string) []string {
 	keys, moved := order(b, o, t)
 	if moved {
 		r.Conflicts = append(r.Conflicts, Conflict{Where: "frontmatter:" + join(path, "(order)"), Base: lines(b), Ours: lines(o), Theirs: lines(t)})
+		if r.theirs {
+			keys = interleave(t, o)
+		}
 	}
 	return keys
 }
