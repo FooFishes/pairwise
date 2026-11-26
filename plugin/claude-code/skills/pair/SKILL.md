@@ -39,6 +39,8 @@ description: 在带有 .pair/ 目录的仓库中工作时使用. 规定如何通
    - 输入首行是 `## 标题 <!-- #sec -->` 时整体替换区块, 否则保留原标题只替换正文.
    - 开头的 Frontmatter 只能写 `assumptions`, 用来整体设置该区块的假设列表; 省略则假设不变.
    - 连续修改同一文档时使用上一次输出的新 base.
+   - 新增区块: 目标写 `<module>#<新 id>`, 输入首行必须是 `## 标题 <!-- #<新 id> -->`, 新区块追加到文档末尾.
+   - 改 Frontmatter (如 scope) 或调整区块顺序时提交完整文档: `pair update <module> --base <hash> <<'EOF'`; 新建模块用 `pair update <id> --kind module <<'EOF'`, Frontmatter 含 id 与 scope.
    - 宿主拒绝 heredoc 时, 用编辑工具把输入写到工作树内 `.pair/` 以外的临时文件, 改用 `--file <path>` 传入, 用完删除.
 5. 确认本次修改不涉及规格变更时执行 `pair skip-update --reason "<原因>"`.
 6. 启用了 Hook 时, 回合结束前若有未读或未闭环的反馈、或改了源码却没更新文档, 结束会被拦截; 按拦截原因中的命令处理即可.
