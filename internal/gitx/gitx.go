@@ -95,6 +95,22 @@ func (r *Repo) ChangedFiles(ctx context.Context, cached bool, baseRef string) ([
 	return splitNUL(out), nil
 }
 
+// Files 返回 dir 下已跟踪与未跟踪的文件, 不含被 .gitignore 忽略的, 路径相对工作树根目录.
+// 合并冲突中的文件在暂存区有多个版本, 会重复出现.
+func (r *Repo) Files(ctx context.Context, dir string) ([]string, error) {
+	out, err := r.Run(ctx, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", dir)
+	if err != nil {
+		return nil, err
+	}
+	return splitNUL(out), nil
+}
+
+// Ignored 报告 path 是否被 .gitignore 忽略.
+func (r *Repo) Ignored(ctx context.Context, path string) bool {
+	_, err := r.Run(ctx, "check-ignore", "-q", "--", path)
+	return err == nil
+}
+
 // MergeFile 在当前目录按行三路合并文件, 结果写回 ours, 冲突处写入 markerSize 个字符的冲突标记; 返回冲突数.
 func MergeFile(ctx context.Context, ours, base, theirs string, markerSize int) (int, error) {
 	_, err := run(ctx, ".", "merge-file", "--marker-size="+strconv.Itoa(markerSize), "-L", "ours", "-L", "base", "-L", "theirs", ours, base, theirs)

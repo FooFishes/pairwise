@@ -16,7 +16,7 @@ description: 在带有 .pair/ 目录的仓库中工作时使用. 规定如何通
 ## 一个回合的流程
 
 1. 开始前执行 `pair drain` 读取开发者已发送的反馈. 每条反馈都带 ID, 必须在本回合闭环.
-2. 修改源码前执行 `pair lookup <path...>` 找到关联模块, 再用 `pair show <module#sec>` 读取区块原文与 base 哈希.
+2. 修改源码前执行 `pair lookup <path...>` 找到关联模块 (也接受目录), 再用 `pair show <module#sec>` 读取区块原文与 base 哈希.
 3. 启用了 Hook 时, 改源码前先 `pair bind <module#sec>`; 只修缺陷、调样式或重构而不改规则时用 `pair bind <module> --preserve "<原因>"`.
    - 本轮上下文给出 Pairwise 会话短码时, 每条 `pair` 命令都带上 `--session <短码>`.
    - bind 报冲突说明其他会话正在改同一区块: 改为绑定不重叠的区块, 或确认不改规则后加 `--preserve`, 不要绕过.

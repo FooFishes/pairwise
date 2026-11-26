@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -167,12 +168,43 @@ func (w *Workspace) Lookup(ctx context.Context, req *pairv1.LookupRequest) (*pai
 			resp.Results = append(resp.Results, r)
 			continue
 		}
-		for _, e := range ix.ModulesFor(rel) {
-			r.Docs = append(r.Docs, summary(e))
+		files, ignored, err := w.dirFiles(ctx, rel)
+		if err != nil {
+			return nil, err
+		}
+		r.Ignored = r.Ignored || ignored
+		var seen []string
+		for _, f := range files {
+			for _, e := range ix.ModulesFor(f) {
+				if !slices.Contains(seen, e.ID) {
+					seen = append(seen, e.ID)
+					r.Docs = append(r.Docs, summary(e))
+				}
+			}
 		}
 		resp.Results = append(resp.Results, r)
 	}
 	return resp, nil
+}
+
+// dirFiles 返回 lookup 要匹配的路径: 目录展开为其中未被忽略的文件 (scope 是文件 Glob, 目录本身多半不会命中),
+// 其余 (含尚不存在、将要新建的文件) 原样返回. 展开不出文件的目录 (如刚新建的空目录) 同样原样返回,
+// 被 .gitignore 忽略的除外. 目录中的文件全被 ignore_globs 忽略时 ignored 为真, 与逐个文件反查的结论一致.
+func (w *Workspace) dirFiles(ctx context.Context, rel string) (files []string, ignored bool, err error) {
+	if fi, err := os.Stat(filepath.Join(w.repo.Root(), rel)); err != nil || !fi.IsDir() {
+		return []string{rel}, false, nil
+	}
+	if files, err = w.repo.Git.Files(ctx, rel); err != nil {
+		return nil, false, err
+	}
+	if len(files) == 0 {
+		if w.repo.Git.Ignored(ctx, rel) {
+			return nil, false, nil
+		}
+		return []string{rel}, false, nil
+	}
+	files = slices.DeleteFunc(files, w.config().Ignored)
+	return files, len(files) == 0, nil
 }
 
 // relPath 把绝对路径或相对工作树根目录的路径转换为相对路径. 工作树根已解析过符号链接,

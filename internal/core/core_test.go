@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -390,5 +391,51 @@ func TestUpdateConflictedDoc(t *testing.T) {
 				t.Errorf("覆盖后:\n%s", got.Raw)
 			}
 		})
+	}
+}
+
+// lookup 的参数是目录时按其中未被忽略的文件反查, 结果取并集; 被 .gitignore 忽略的目录不命中.
+func TestLookupDirectory(t *testing.T) {
+	w := newWorkspace(t)
+	for _, p := range []string{"lib/discover/a.ts", "lib/discover/b.ts", "lib/other/c.ts", "lib/discover/out/d.ts"} {
+		p = filepath.Join(w.repo.Root(), p)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(w.repo.Root(), ".gitignore"), []byte("lib/discover/out/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 刚新建的空目录展开不出文件, 按目录自身匹配.
+	if err := os.MkdirAll(filepath.Join(w.repo.Root(), "lib/discover/widgets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := must(w.Lookup(ctx, &pairv1.LookupRequest{Paths: []string{"lib", ".", "lib/other", "lib/discover/out", "lib/new/e.ts", "lib/discover/widgets"}})).Results
+	var got [][]string
+	for _, r := range res {
+		var ids []string
+		for _, d := range r.Docs {
+			ids = append(ids, d.Id)
+		}
+		got = append(got, ids)
+	}
+	if want := [][]string{{"discover"}, {"discover"}, nil, nil, nil, {"discover"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("lookup = %v, want %v", got, want)
+	}
+
+	// 文件全被 ignore_globs 忽略的目录报告为已忽略, 与逐个文件反查一致.
+	for p, content := range map[string]string{"lib/discover/spec/a_test.ts": "", ".pair/config.toml": "ignore_globs = [\"**/*_test.ts\"]\n"} {
+		if err := os.MkdirAll(filepath.Join(w.repo.Root(), filepath.Dir(p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(w.repo.Root(), p), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := must(w.Lookup(ctx, &pairv1.LookupRequest{Paths: []string{"lib/discover/spec"}})).Results[0]; !r.Ignored || len(r.Docs) != 0 {
+		t.Errorf("lookup lib/discover/spec = %v", r)
 	}
 }
