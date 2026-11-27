@@ -1,0 +1,2 @@
+# 源码与测试数据一律 LF, 不受各平台 core.autocrlf 影响.
+* text=auto eol=lf
