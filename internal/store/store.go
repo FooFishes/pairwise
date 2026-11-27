@@ -62,7 +62,9 @@ func Open(stateDir string) (*Store, error) {
 		}
 	}
 	// 事务一律以 BEGIN IMMEDIATE 开始, 避免读后写的事务升级写锁时直接返回 SQLITE_BUSY.
-	dsn := filepath.Join(stateDir, "pair.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+	// WAL 下 synchronous=NORMAL 只在 checkpoint 时刷盘: 提交不再逐次刷盘 (Windows 上刷盘很慢,
+	// 并发写入者持锁过久会等满 busy_timeout); 代价是断电或系统崩溃时可能丢失最近的提交, 运行态可以接受.
+	dsn := filepath.Join(stateDir, "pair.db") + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
