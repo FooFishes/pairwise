@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -21,7 +22,8 @@ type Repo struct {
 	CommonDir string
 }
 
-// Open 从 dir 向上定位所在的工作树. 返回的路径均为解析过符号链接的绝对路径.
+// Open 从 dir 向上定位所在的工作树. 返回的路径均为解析过符号链接、使用本机分隔符的绝对路径
+// (Windows 上 git 输出以 / 分隔).
 func Open(ctx context.Context, dir string) (*Repo, error) {
 	out, err := run(ctx, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir")
 	if errors.Is(err, exec.ErrNotFound) {
@@ -31,7 +33,7 @@ func Open(ctx context.Context, dir string) (*Repo, error) {
 		return nil, fmt.Errorf("%s 不在 Git 工作树中.\n修复操作: 进入仓库目录后重试; 新项目先执行 `git init`", dir)
 	}
 	f := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-	return &Repo{Root: f[0], GitDir: f[1], CommonDir: f[2]}, nil
+	return &Repo{Root: filepath.FromSlash(f[0]), GitDir: filepath.FromSlash(f[1]), CommonDir: filepath.FromSlash(f[2])}, nil
 }
 
 // Run 在工作树根目录执行 git, 返回 stdout; 失败时错误信息包含 stderr.
@@ -76,7 +78,7 @@ func Detached(branch string) bool {
 
 // HeadPath 返回需要监听以感知分支切换的 HEAD 文件路径.
 func (r *Repo) HeadPath() string {
-	return r.GitDir + "/HEAD"
+	return filepath.Join(r.GitDir, "HEAD")
 }
 
 // ChangedFiles 返回相对工作树根目录的改动路径. cached 为真时比较暂存区与 HEAD
@@ -157,7 +159,7 @@ func (r *Repo) HooksDir(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return filepath.FromSlash(strings.TrimSpace(string(out))), nil
 }
 
 // splitNUL 切分以 NUL 结尾的记录.

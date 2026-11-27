@@ -209,7 +209,7 @@ func Run(ctx context.Context, dir string, newService NewService) error {
 		return err
 	}
 	defer w.Close()
-	pairDir, head := filepath.Join(r.Root, repo.Dir), filepath.Clean(r.HeadPath())
+	pairDir, head := filepath.Join(r.Root, repo.Dir), r.HeadPath()
 	if err := watchPaths(w, pairDir, head); err != nil {
 		return err
 	}
