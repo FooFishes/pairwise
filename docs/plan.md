@@ -8,6 +8,7 @@
 
 - 本轮交付：Go 单二进制 `pair`（全功能 CLI + 工作树常驻进程）、内嵌的本地 Web 工作台、Git 合并驱动与提交钩子、`pair hook` 生命周期子命令、Claude Code 插件（Hook 配置 + `SKILL.md`）、CI 与 GoReleaser 配置。
 - 后续阶段（本轮不做）：Desktop 桌面端、IDE 内嵌面板、OpenCode 插件。
+- 支持 macOS、Linux 与 Windows，CI 在三个平台上运行全部检查与测试；仓库以 `.gitattributes` 固定 LF 检出，测试数据不受 `core.autocrlf` 影响。
 - CI 与 GoReleaser / Homebrew tap 只提供配置文件，本地无法验证实际发布。
 
 ## 2. 阶段
