@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -187,7 +188,9 @@ func TestWriteFileAtomic(t *testing.T) {
 	if err := WriteFileAtomic(path, []byte("一")); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o644 {
+	// Windows 只有只读属性, 不检查权限位.
+	unix := runtime.GOOS != "windows"
+	if fi, _ := os.Stat(path); unix && fi.Mode().Perm() != 0o644 {
 		t.Errorf("新文件权限 = %v, want 0644", fi.Mode().Perm())
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
@@ -198,7 +201,7 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 	fi, _ := os.Stat(path)
 	b, _ := os.ReadFile(path)
-	if fi.Mode().Perm() != 0o600 || string(b) != "二" {
+	if unix && fi.Mode().Perm() != 0o600 || string(b) != "二" {
 		t.Errorf("覆盖后 权限 = %v, 内容 = %q", fi.Mode().Perm(), b)
 	}
 	if des, _ := os.ReadDir(dir); len(des) != 1 {

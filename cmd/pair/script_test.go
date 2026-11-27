@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -88,14 +89,19 @@ func cmdExitCode(ts *testscript.TestScript, neg bool, args []string) {
 	}
 }
 
-// cmdExpand 实现 `expand FILE...`: 原地展开文件中的 $NAME 环境变量. 宿主 Hook 输入中的 cwd 与 file_path
-// 是绝对路径, 归档中的 JSON 须在运行时代入 $WORK.
+// cmdExpand 实现 `expand FILE...`: 原地把 JSON 文件中的 $NAME 展开为按 JSON 字符串转义的环境变量值.
+// 宿主 Hook 输入中的 cwd 与 file_path 是绝对路径, 归档中的 JSON 须在运行时代入 $WORK (Windows 上含反斜杠).
 func cmdExpand(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) == 0 {
 		ts.Fatalf("usage: expand FILE...")
 	}
+	escape := func(name string) string {
+		b, err := json.Marshal(ts.Getenv(name))
+		ts.Check(err)
+		return string(b[1 : len(b)-1])
+	}
 	for _, f := range args {
-		ts.Check(os.WriteFile(ts.MkAbs(f), []byte(os.Expand(ts.ReadFile(f), ts.Getenv)), 0o644))
+		ts.Check(os.WriteFile(ts.MkAbs(f), []byte(os.Expand(ts.ReadFile(f), escape)), 0o644))
 	}
 }
 

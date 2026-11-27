@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -74,7 +75,8 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(filepath.Dir(info.Socket)); err != nil || fi.Mode().Perm() != 0o700 {
+	// Windows 上访问控制交给 ACL, 目录没有权限位.
+	if fi, err := os.Stat(filepath.Dir(info.Socket)); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Fatalf("socket 目录 %s: %v, %v", filepath.Dir(info.Socket), fi, err)
 	}
 

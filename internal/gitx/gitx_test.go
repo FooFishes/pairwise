@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -149,7 +150,11 @@ func TestChangedFiles(t *testing.T) {
 		return files
 	}
 
+	// 需要转义的路径; Windows 文件名不允许引号与制表符.
 	odd := "目录/带 空格\t\"引号\".md"
+	if runtime.GOOS == "windows" {
+		odd = "目录/带 空格.md"
+	}
 	write(t, filepath.Join(root, odd), "x")
 	write(t, filepath.Join(root, "old.go"), "package a\n")
 	git("add", ".")
