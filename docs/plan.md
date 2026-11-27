@@ -54,7 +54,7 @@ testdata/script/     testscript 端到端用例
 ### 4.1 进程与通信
 
 - **哪些命令不经常驻进程**：`init`、`check`、`merge-driver`、`git-hook prepare-commit-msg / commit-msg` 在进程内直接执行（CI 与 `git merge` 期间不应拉起后台进程）；其余命令一律经 Unix Socket 调用常驻进程，未运行时自动拉起。
-- **常驻进程入口**：隐藏子命令 `pair daemon` 以前台方式运行常驻进程，自动拉起时以脱离终端的子进程执行它；`pair serve` 确保常驻进程运行并输出界面地址，`pair serve --stop` 停止当前工作树的常驻进程。
+- **常驻进程入口**：隐藏子命令 `pair daemon` 以前台方式运行常驻进程，自动拉起时以脱离终端的子进程执行它（Windows 上给它独立的隐藏控制台而不是无控制台进程，否则它调用的每条 git 都要新建控制台）；`pair serve` 确保常驻进程运行并输出界面地址，`pair serve --stop` 停止当前工作树的常驻进程。
 - **Socket 路径**：运行目录取 `$PAIR_RUNTIME_DIR`，未设置时依次取 `$XDG_RUNTIME_DIR` 与系统临时目录；其下的每用户私有目录 `pair-<uid>`（权限 `0700`，属主必须是当前用户，否则报错）中的 `<工作树根路径 SHA-256 前 16 位>.sock`；Windows 上私有目录名为 `pair`，访问控制交给 ACL，不检查属主与权限位。路径连同结尾的 NUL 放不进系统上限（macOS 104 字节、Linux 108 字节）时报错，并给出设置更短 `PAIR_RUNTIME_DIR` 的修复命令。
 - **运行信息**：`$GIT_DIR/pair/daemon.json` 记录 pid、socket 路径、HTTP 端口与构建指纹；CLI 每次建立连接时按其中记录的 socket 连接（没有记录时按上一条推算），因此运行目录环境变量与常驻进程不同也能连上；文件锁被占用却连不上时报错并给出 `kill <pid>`。CLI 发现构建指纹与自身不一致（升级或重新编译）时请求旧进程退出，等它释放文件锁后再拉起，并发的多个 CLI 最终连上同一个新实例。构建指纹取可执行文件的大小与修改时间。工作树未初始化时不拉起常驻进程。
 - **事件推送**：RPC 走 Connect，事件流是独立的标准 SSE 端点 `GET /events`，用 `id:` 字段携带递增序号，支持 `Last-Event-ID` 请求头与 `?since=` 参数补发；浏览器直接用 `EventSource`，`pair watch --jsonl` 经 Unix Socket 读同一端点。
